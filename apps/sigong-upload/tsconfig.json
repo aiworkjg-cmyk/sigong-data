@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "types": ["node", "vite/client"],
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"],
+      "@jg/sharepoint-core": ["../../packages/sharepoint-core/src/index.ts"]
+    }
+  },
+  "include": ["src", "server", "scripts", "vite.config.ts"]
+}

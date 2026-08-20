@@ -1,11 +1,23 @@
+# Dependencies
 node_modules/
-build/
+
+# Build output
 dist/
+build/
 coverage/
-.DS_Store
-*.log
-.env*
+
+# Local runtime data (uploads staging, JSON store, SharePoint test mirror)
+data/
+tmp/
+
+# Secrets — never commit. .env.example documents the required keys.
+.env
+.env.*
 !.env.example
 
-# Local runtime data (uploads, JSON store, SharePoint test mirror)
-data/
+# Editor / OS
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.log

@@ -1,0 +1,15 @@
+{
+  "name": "@jg/sharepoint-core",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Microsoft Graph / SharePoint upload client and pluggable folder-classification rules, shared across workspace apps.",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "lint": "tsc --noEmit"
+  }
+}

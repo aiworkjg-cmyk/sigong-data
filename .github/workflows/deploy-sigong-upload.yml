@@ -1,0 +1,92 @@
+name: Deploy sigong-upload
+
+# Builds the app and pushes it to Azure App Service. Only paths that affect
+# this app trigger a deploy, so a future sibling app in apps/ will not.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/sigong-upload/**'
+      - 'packages/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/deploy-sigong-upload.yml'
+  workflow_dispatch:
+
+env:
+  NODE_VERSION: '20.x'
+  # Must match the App Service name created in docs/azure-deployment.md.
+  AZURE_WEBAPP_NAME: sigong-upload
+
+concurrency:
+  # A newer commit supersedes an in-flight deploy rather than racing it.
+  group: deploy-sigong-upload
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run lint
+
+      - name: Build web and server bundles
+        run: npm run build --workspace @jg/sigong-upload
+
+      # The server bundle already inlines @jg/sharepoint-core, so only the
+      # externalised runtime packages need to ship. Reinstalling without dev
+      # dependencies keeps the deployment artifact small.
+      - name: Install production dependencies only
+        run: |
+          rm -rf node_modules
+          npm ci --omit=dev
+          # The workspace symlink is not needed at runtime and does not
+          # survive artifact packaging cleanly.
+          rm -rf node_modules/@jg
+
+      - name: Assemble deployment package
+        run: |
+          mkdir -p deploy/apps/sigong-upload
+          cp -r node_modules deploy/node_modules
+          cp -r apps/sigong-upload/dist deploy/apps/sigong-upload/dist
+          cp package.json package-lock.json deploy/
+          cp apps/sigong-upload/package.json deploy/apps/sigong-upload/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sigong-upload
+          path: deploy
+          retention-days: 5
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: ${{ steps.deploy.outputs.webapp-url }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: sigong-upload
+          path: deploy
+
+      - name: Deploy to Azure App Service
+        id: deploy
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: ${{ env.AZURE_WEBAPP_NAME }}
+          # Create this secret from the App Service publish profile.
+          # See docs/azure-deployment.md for the OIDC alternative, which
+          # avoids storing a long-lived credential in GitHub.
+          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
+          package: deploy
