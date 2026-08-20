@@ -6,3 +6,6 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Local runtime data (uploads, JSON store, SharePoint test mirror)
+data/

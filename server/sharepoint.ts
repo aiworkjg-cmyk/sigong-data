@@ -29,7 +29,7 @@ export function generateSharePointFolderPath(
   managerName: string
 ): SharePointFolderInfo {
   const rootFolder = '시공현장자료';
-  
+
   // Format month YYYY-MM
   let monthFolder = '2026-08';
   if (constructionDate && /^\d{4}-\d{2}/.test(constructionDate)) {
@@ -67,12 +67,32 @@ export interface SharePointSyncResult {
   errors?: string[];
 }
 
+// Graph API path-segment safe encoding: encodeURIComponent() alone would also
+// escape '/', which breaks colon-style path addressing (root:/A/B/C:/content).
+// Each segment must be encoded individually and rejoined with literal slashes.
+function encodeGraphPath(itemPath: string): string {
+  return itemPath
+    .split('/')
+    .filter(Boolean)
+    .map(encodeURIComponent)
+    .join('/');
+}
+
+// Simple PUT upload only supports files up to 4MB; anything larger must use
+// a resumable upload session in byte-range chunks.
+const SIMPLE_UPLOAD_MAX_BYTES = 4 * 1024 * 1024;
+// Must be a multiple of 320 KiB (327,680 bytes) per Graph API requirements.
+const UPLOAD_CHUNK_SIZE = 5 * 1024 * 1024;
+
 export class SharePointService {
   private tenantId: string;
   private clientId: string;
   private clientSecret: string;
   private siteId: string;
   private driveId: string;
+
+  private cachedToken: string | null = null;
+  private tokenExpiresAt = 0;
 
   constructor() {
     this.tenantId = process.env.SHAREPOINT_TENANT_ID || '';
@@ -106,9 +126,24 @@ export class SharePointService {
     };
   }
 
+  // Resolves the Graph API drive base URL. Prefers an explicit Drive ID; if
+  // only a Site ID is configured (the common case for a Teams channel's
+  // SharePoint site), addresses the site's default document library drive
+  // directly instead of guessing a drive ID.
+  private getDriveBase(): string {
+    if (this.driveId) {
+      return `https://graph.microsoft.com/v1.0/drives/${this.driveId}`;
+    }
+    return `https://graph.microsoft.com/v1.0/sites/${this.siteId}/drive`;
+  }
+
   private async getAccessToken(): Promise<string> {
     if (!this.isLiveConfigured()) {
       throw new Error('SharePoint API credentials are not configured');
+    }
+
+    if (this.cachedToken && Date.now() < this.tokenExpiresAt) {
+      return this.cachedToken;
     }
 
     const tokenUrl = `https://login.microsoftonline.com/${this.tenantId}/oauth2/v2.0/token`;
@@ -130,7 +165,154 @@ export class SharePointService {
     }
 
     const data = await res.json();
-    return data.access_token;
+    this.cachedToken = data.access_token;
+    // Refresh a minute early to avoid using a token that expires mid-request.
+    this.tokenExpiresAt = Date.now() + (Math.max(data.expires_in - 60, 60)) * 1000;
+    return this.cachedToken as string;
+  }
+
+  // Creates every missing folder segment along folderPath (idempotent: an
+  // already-existing folder is treated as success, not an error). Returns
+  // the driveItem for the final (deepest) segment so callers can surface its
+  // webUrl.
+  private async ensureFolderPath(base: string, accessToken: string, folderPath: string): Promise<any> {
+    const segments = folderPath.split('/').filter(Boolean);
+    let currentPath = '';
+    let lastItem: any = null;
+
+    for (const segment of segments) {
+      const childrenUrl = currentPath
+        ? `${base}/root:/${encodeGraphPath(currentPath)}:/children`
+        : `${base}/root/children`;
+
+      const res = await fetch(childrenUrl, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          name: segment,
+          folder: {},
+          '@microsoft.graph.conflictBehavior': 'fail',
+        }),
+      });
+
+      currentPath = currentPath ? `${currentPath}/${segment}` : segment;
+
+      if (res.ok) {
+        lastItem = await res.json();
+      } else if (res.status === 409) {
+        // Folder already exists — fetch it so we still have its webUrl.
+        const existingRes = await fetch(`${base}/root:/${encodeGraphPath(currentPath)}`, {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        lastItem = existingRes.ok ? await existingRes.json() : null;
+      } else {
+        const errText = await res.text();
+        throw new Error(`SharePoint 폴더 생성 실패 (${segment}): ${res.status} ${errText}`);
+      }
+    }
+
+    return lastItem;
+  }
+
+  private async uploadSmallFile(
+    base: string,
+    accessToken: string,
+    remotePath: string,
+    content: Buffer | string,
+    contentType: string
+  ): Promise<any> {
+    const url = `${base}/root:/${encodeGraphPath(remotePath)}:/content`;
+    const res = await fetch(url, {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': contentType,
+      },
+      body: content as any,
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`파일 업로드 실패 (${remotePath}): ${res.status} ${errText}`);
+    }
+
+    return res.json();
+  }
+
+  // Uploads files larger than SIMPLE_UPLOAD_MAX_BYTES using a resumable
+  // upload session in Graph-required byte-range chunks.
+  private async uploadLargeFile(
+    base: string,
+    accessToken: string,
+    remotePath: string,
+    buffer: Buffer
+  ): Promise<any> {
+    const sessionUrl = `${base}/root:/${encodeGraphPath(remotePath)}:/createUploadSession`;
+    const sessionRes = await fetch(sessionUrl, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        item: { '@microsoft.graph.conflictBehavior': 'replace' },
+      }),
+    });
+
+    if (!sessionRes.ok) {
+      const errText = await sessionRes.text();
+      throw new Error(`업로드 세션 생성 실패 (${remotePath}): ${sessionRes.status} ${errText}`);
+    }
+
+    const session = await sessionRes.json();
+    const uploadUrl = session.uploadUrl as string;
+    const total = buffer.length;
+    let lastResponseBody: any = null;
+
+    for (let start = 0; start < total; start += UPLOAD_CHUNK_SIZE) {
+      const end = Math.min(start + UPLOAD_CHUNK_SIZE, total) - 1;
+      const chunk = buffer.subarray(start, end + 1);
+
+      // NOTE: the upload session URL is pre-authenticated; do not send an
+      // Authorization header on chunk requests (Graph API requirement).
+      const chunkRes = await fetch(uploadUrl, {
+        method: 'PUT',
+        headers: {
+          'Content-Length': String(chunk.length),
+          'Content-Range': `bytes ${start}-${end}/${total}`,
+        },
+        body: chunk,
+      });
+
+      if (!chunkRes.ok) {
+        const errText = await chunkRes.text();
+        throw new Error(`대용량 파일 업로드 실패 (${remotePath}, byte ${start}): ${chunkRes.status} ${errText}`);
+      }
+
+      if (chunkRes.status === 200 || chunkRes.status === 201) {
+        lastResponseBody = await chunkRes.json();
+      }
+    }
+
+    return lastResponseBody;
+  }
+
+  private async uploadFile(
+    base: string,
+    accessToken: string,
+    remotePath: string,
+    filePath: string
+  ): Promise<any> {
+    const stat = fs.statSync(filePath);
+    if (stat.size >= SIMPLE_UPLOAD_MAX_BYTES) {
+      const buffer = fs.readFileSync(filePath);
+      return this.uploadLargeFile(base, accessToken, remotePath, buffer);
+    }
+    const buffer = fs.readFileSync(filePath);
+    return this.uploadSmallFile(base, accessToken, remotePath, buffer, 'application/octet-stream');
   }
 
   public async syncSiteToSharePoint(
@@ -160,11 +342,15 @@ export class SharePointService {
     // If LIVE mode
     if (this.isLiveConfigured()) {
       try {
+        const base = this.getDriveBase();
         const accessToken = await this.getAccessToken();
-        const driveId = this.driveId || 'root';
         const syncedFiles: string[] = [];
 
-        // 1. Upload Metadata JSON to SharePoint
+        // 1. Create the classification folder hierarchy: 시공현장자료 / YYYY-MM / 현장폴더 / 첨부파일
+        const siteFolderItem = await this.ensureFolderPath(base, accessToken, folderInfo.fullFolderPath);
+        await this.ensureFolderPath(base, accessToken, folderInfo.attachmentsFolderPath);
+
+        // 2. Upload Metadata JSON to SharePoint
         const metadataContent = JSON.stringify(
           {
             현장고유ID: siteRecord.id,
@@ -185,57 +371,47 @@ export class SharePointService {
           2
         );
 
-        const metaUploadUrl = `https://graph.microsoft.com/v1.0/drives/${driveId}/root:/${encodeURIComponent(
-          folderInfo.fullFolderPath
-        )}/현장정보.json:/content`;
-
-        const metaRes = await fetch(metaUploadUrl, {
-          method: 'PUT',
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            'Content-Type': 'application/json',
-          },
-          body: metadataContent,
-        });
-
-        if (!metaRes.ok) {
-          throw new Error(`Failed to upload 현장정보.json to SharePoint: ${metaRes.statusText}`);
-        }
+        await this.uploadSmallFile(
+          base,
+          accessToken,
+          `${folderInfo.fullFolderPath}/현장정보.json`,
+          metadataContent,
+          'application/json'
+        );
         syncedFiles.push('현장정보.json');
 
-        // 2. Upload Attachments
+        // 3. Upload Attachments (auto-routed to chunked upload when >4MB)
+        const errors: string[] = [];
         for (const file of files) {
-          if (fs.existsSync(file.filePath)) {
-            const fileStream = fs.readFileSync(file.filePath);
-            const fileUploadUrl = `https://graph.microsoft.com/v1.0/drives/${driveId}/root:/${encodeURIComponent(
-              folderInfo.attachmentsFolderPath
-            )}/${encodeURIComponent(file.originalName)}:/content`;
-
-            const fileRes = await fetch(fileUploadUrl, {
-              method: 'PUT',
-              headers: {
-                Authorization: `Bearer ${accessToken}`,
-                'Content-Type': 'application/octet-stream',
-              },
-              body: fileStream,
-            });
-
-            if (fileRes.ok) {
-              syncedFiles.push(file.originalName);
-            }
+          if (!fs.existsSync(file.filePath)) continue;
+          try {
+            await this.uploadFile(
+              base,
+              accessToken,
+              `${folderInfo.attachmentsFolderPath}/${file.originalName}`,
+              file.filePath
+            );
+            syncedFiles.push(file.originalName);
+          } catch (fileErr: any) {
+            errors.push(`${file.originalName}: ${fileErr.message || String(fileErr)}`);
           }
         }
 
+        const allFilesSynced = errors.length === 0;
+
         return {
-          success: true,
+          success: allFilesSynced,
           mode: 'LIVE',
           folderPath: folderInfo.fullFolderPath,
-          webUrl: `https://sharepoint.com/sites/construction/${folderInfo.fullFolderPath}`,
-          message: `SharePoint [${folderInfo.fullFolderPath}] 폴더에 성공적으로 저장되었습니다. (동기화된 파일: ${syncedFiles.length}개)`,
+          webUrl: siteFolderItem?.webUrl,
+          message: allFilesSynced
+            ? `SharePoint [${folderInfo.fullFolderPath}] 폴더에 성공적으로 저장되었습니다. (동기화된 파일: ${syncedFiles.length}개)`
+            : `SharePoint에 일부 파일 동기화가 실패했습니다. (성공: ${syncedFiles.length}개, 실패: ${errors.length}개)`,
           syncedFiles,
+          errors: errors.length ? errors : undefined,
         };
       } catch (err: any) {
-        console.error('Live SharePoint Sync Failed, falling back to simulated sync log:', err);
+        console.error('Live SharePoint Sync Failed:', err);
         return {
           success: false,
           mode: 'LIVE',
