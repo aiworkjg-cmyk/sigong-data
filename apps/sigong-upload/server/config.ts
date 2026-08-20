@@ -44,6 +44,39 @@ export const config = {
     maxFileSizeBytes: int(process.env.MAX_FILE_SIZE_MB, 100) * 1024 * 1024,
   },
 
+  /**
+   * Selectable product lines. The submission form renders exactly this list and
+   * the server rejects anything outside it, so the value is always safe to use
+   * as a folder name.
+   */
+  constructionTypes: (process.env.CONSTRUCTION_TYPES || '백조,인덕션,한샘,이펙스,워너홈')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean),
+
+  worker: {
+    /** Submissions filed in parallel. One keeps ordering predictable. */
+    concurrency: int(process.env.WORKER_CONCURRENCY, 1),
+    /** Automatic retries before a submission is left for manual retry. */
+    maxAttempts: int(process.env.WORKER_MAX_ATTEMPTS, 3),
+    retryDelayMs: int(process.env.WORKER_RETRY_DELAY_MS, 30_000),
+  },
+
+  mail: {
+    /**
+     * Mailbox the alert is sent from, via Microsoft Graph using the same app
+     * registration as SharePoint. Requires the Mail.Send application permission.
+     */
+    sender: process.env.MAIL_SENDER?.trim() || '',
+    /** Comma-separated recipients for upload-failure alerts. */
+    alertRecipients: (process.env.ADMIN_ALERT_EMAIL || '')
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean),
+    /** Public base URL, used to link admins straight to the failed submission. */
+    appUrl: (process.env.APP_URL || '').trim().replace(/\/$/, ''),
+  },
+
   sharePoint: {
     tenantId: process.env.SHAREPOINT_TENANT_ID?.trim() || '',
     clientId: process.env.SHAREPOINT_CLIENT_ID?.trim() || '',
@@ -112,6 +145,18 @@ export function validateConfig(): { errors: string[]; warnings: string[] } {
     warnings.push(
       'Azure Table Storage 설정이 없어 로컬 JSON 파일 저장소를 사용합니다. (운영 배포 전 설정 필요)'
     );
+  }
+
+  if (config.constructionTypes.length === 0) {
+    errors.push('CONSTRUCTION_TYPES 가 비어 있습니다. 시공종류를 1개 이상 지정해야 합니다.');
+  }
+
+  if (config.mail.alertRecipients.length === 0) {
+    warnings.push(
+      'ADMIN_ALERT_EMAIL 이 없어 업로드 실패 시 메일 알림이 발송되지 않습니다. (관리자 화면에서는 확인 가능)'
+    );
+  } else if (!config.mail.sender) {
+    warnings.push('MAIL_SENDER 가 없어 실패 알림 메일을 보낼 수 없습니다. 발신 메일 주소를 지정하세요.');
   }
 
   return { errors, warnings };

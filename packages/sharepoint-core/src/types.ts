@@ -51,6 +51,8 @@ export interface SyncResult {
 
 export interface SiteSubmission {
   id: string;
+  /** Product line the work belongs to, e.g. 백조 / 인덕션. */
+  constructionType: string;
   managerName: string;
   address: string;
   constructionDate: string;

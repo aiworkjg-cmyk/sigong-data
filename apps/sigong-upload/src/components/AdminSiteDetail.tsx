@@ -22,13 +22,7 @@ import {
 } from 'lucide-react';
 import { SiteRecord, SiteFile } from '../types';
 import { fileContentUrl } from '../api';
-
-const STATUS_BADGE: Record<SiteRecord['status'], { label: string; className: string }> = {
-  COMPLETED: { label: '저장 완료', className: 'bg-emerald-100 text-emerald-800 border-emerald-200' },
-  PARTIAL: { label: '일부 저장 실패', className: 'bg-amber-100 text-amber-800 border-amber-200' },
-  FAILED: { label: '저장 실패', className: 'bg-red-100 text-red-800 border-red-200' },
-  PENDING: { label: '처리 중', className: 'bg-slate-100 text-slate-700 border-slate-200' },
-};
+import { statusMeta } from '../status';
 
 interface AdminSiteDetailProps {
   site: SiteRecord;
@@ -110,7 +104,7 @@ export const AdminSiteDetail: React.FC<AdminSiteDetailProps> = ({
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold transition-colors shadow-2xs"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isRetrying ? 'animate-spin text-blue-600' : ''}`} />
-            <span>SharePoint 재동기화</span>
+            <span>저장 재시도</span>
           </button>
         </div>
       </div>
@@ -125,9 +119,12 @@ export const AdminSiteDetail: React.FC<AdminSiteDetailProps> = ({
                 {site.address}
               </h2>
               <span
-                className={`px-2.5 py-0.5 rounded-full text-xs font-bold border ${STATUS_BADGE[site.status].className}`}
+                className={`px-2.5 py-0.5 rounded-full text-xs font-bold border ${statusMeta(site.status).className}`}
               >
-                {STATUS_BADGE[site.status].label}
+                {statusMeta(site.status).label}
+              </span>
+              <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                {site.constructionType}
               </span>
               <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-slate-100 text-slate-600 border border-slate-200">
                 {site.storageMode === 'LIVE' ? 'SharePoint 연동' : '테스트 저장'}
@@ -167,9 +164,13 @@ export const AdminSiteDetail: React.FC<AdminSiteDetailProps> = ({
           {/* 시공일 */}
           <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-100">
             <span className="text-xs text-slate-500 block mb-1 flex items-center gap-1">
-              <Calendar className="w-3.5 h-3.5 text-slate-400" /> 시공일
+              <Calendar className="w-3.5 h-3.5 text-slate-400" /> 시공일 / 시공종류
             </span>
-            <p className="font-bold text-slate-900 font-mono">{site.constructionDate}</p>
+            <p className="font-bold text-slate-900">
+              <span className="font-mono">{site.constructionDate}</span>
+              <span className="text-slate-400 mx-1.5">·</span>
+              {site.constructionType}
+            </p>
           </div>
 
           {/* 총 첨부파일 */}

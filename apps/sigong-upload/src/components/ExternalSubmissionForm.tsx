@@ -27,6 +27,7 @@ interface SelectedFileItem {
 
 interface ExternalSubmissionFormProps {
   onSubmit: (formData: {
+    constructionType: string;
     managerName: string;
     address: string;
     constructionDate: string;
@@ -34,6 +35,8 @@ interface ExternalSubmissionFormProps {
     files: File[];
   }) => void;
   isSubmitting: boolean;
+  /** Selectable 시공종류, served by the API so the list stays configurable. */
+  constructionTypes: string[];
 }
 
 const MAX_FILES = 50;
@@ -59,7 +62,9 @@ function getTodayString(): string {
 export const ExternalSubmissionForm: React.FC<ExternalSubmissionFormProps> = ({
   onSubmit,
   isSubmitting,
+  constructionTypes,
 }) => {
+  const [constructionType, setConstructionType] = useState('');
   const [managerName, setManagerName] = useState('');
   const [address, setAddress] = useState('');
   const [constructionDate, setConstructionDate] = useState(getTodayString());
@@ -68,6 +73,7 @@ export const ExternalSubmissionForm: React.FC<ExternalSubmissionFormProps> = ({
   
   // Validation errors
   const [errors, setErrors] = useState<{
+    constructionType?: string;
     managerName?: string;
     address?: string;
     constructionDate?: string;
@@ -195,6 +201,10 @@ export const ExternalSubmissionForm: React.FC<ExternalSubmissionFormProps> = ({
       errs.managerName = '담당자 이름을 입력해 주세요.';
     }
 
+    if (!constructionType) {
+      errs.constructionType = '시공종류를 선택해 주세요.';
+    }
+
     if (!address.trim()) {
       errs.address = '현장 주소를 입력해 주세요.';
     }
@@ -222,6 +232,7 @@ export const ExternalSubmissionForm: React.FC<ExternalSubmissionFormProps> = ({
     }
 
     onSubmit({
+      constructionType,
       managerName: managerName.trim(),
       address: address.trim(),
       constructionDate,
@@ -292,6 +303,49 @@ export const ExternalSubmissionForm: React.FC<ExternalSubmissionFormProps> = ({
           </div>
 
           <div className="space-y-5">
+            {/* 0. 시공종류 — chosen from a fixed list, never typed, because the
+                 value becomes a folder name in the document library. */}
+            <div>
+              <label className="block text-sm font-semibold text-slate-800 mb-1.5">
+                시공종류 <span className="text-rose-500">*</span>
+              </label>
+              <div
+                id="construction-type-group"
+                role="radiogroup"
+                aria-label="시공종류"
+                className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2"
+              >
+                {constructionTypes.map((type) => {
+                  const selected = constructionType === type;
+                  return (
+                    <button
+                      key={type}
+                      type="button"
+                      role="radio"
+                      aria-checked={selected}
+                      onClick={() => {
+                        setConstructionType(type);
+                        setErrors((prev) => ({ ...prev, constructionType: undefined }));
+                      }}
+                      className={`px-3 py-3 rounded-xl border-2 text-sm font-bold transition-colors ${
+                        selected
+                          ? 'border-blue-600 bg-blue-50 text-blue-800'
+                          : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50'
+                      }`}
+                    >
+                      {type}
+                    </button>
+                  );
+                })}
+              </div>
+              {errors.constructionType && (
+                <p className="mt-1.5 text-xs text-rose-600 flex items-center gap-1">
+                  <AlertTriangle className="w-3.5 h-3.5" />
+                  {errors.constructionType}
+                </p>
+              )}
+            </div>
+
             {/* 1. 담당자 이름 */}
             <div>
               <label htmlFor="input-manager-name" className="block text-sm font-semibold text-slate-800 mb-1.5">
@@ -612,8 +666,7 @@ export const ExternalSubmissionForm: React.FC<ExternalSubmissionFormProps> = ({
             <div>
               <p className="font-semibold text-slate-800 mb-0.5">안전한 데이터 보관 안내</p>
               <p>
-                제출 버튼을 누르면 현장 정보와 첨부파일이 지정된 Microsoft SharePoint 전용 폴더로 자동 분류되어 업로드됩니다.
-                대용량 동영상 업로드 시에는 저장이 완료될 때까지 브라우저 화면을 유지해 주시기 바랍니다.
+                파일 전송이 끝나면 바로 완료 화면으로 넘어갑니다. 전송 중에는 브라우저 화면을 유지해 주세요.
               </p>
             </div>
           </div>

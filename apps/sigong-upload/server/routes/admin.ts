@@ -1,4 +1,9 @@
 import { Router } from 'express';
+import type { Response } from 'express';
+import { AdminError } from '../admin-directory';
+import { requireMaster } from '../auth';
+import { config } from '../config';
+import { mailer } from '../mailer';
 import type { AppContext } from '../context';
 import type { Issue, IssuePriority, IssueStatus } from '../../src/types';
 import { cleanText, clientIp, generateId } from '../util';
@@ -31,6 +36,12 @@ export function createAdminRouter(ctx: AppContext): Router {
       sharePoint,
       connectivity,
       recordBackend: ctx.repos.backend,
+      constructionTypes: config.constructionTypes,
+      mail: {
+        configured: mailer.isConfigured(),
+        sender: config.mail.sender,
+        recipients: config.mail.alertRecipients,
+      },
       warnings: ctx.warnings,
     });
   });
@@ -72,20 +83,30 @@ export function createAdminRouter(ctx: AppContext): Router {
     res.json({ site });
   });
 
+  /**
+   * Queues another filing attempt. Returns straight away — progress shows up in
+   * the record's status, the same path an automatic retry takes.
+   */
   router.post('/sites/:id/retry', async (req, res) => {
-    try {
-      const site = await ctx.submissions.retry(req.params.id, {
-        clientIp: clientIp(req),
-        userAgent: String(req.headers['user-agent'] || ''),
-      });
-      if (!site) {
-        res.status(404).json({ error: '현장을 찾을 수 없습니다.' });
-        return;
-      }
-      res.json({ site });
-    } catch (err: any) {
-      res.status(500).json({ error: '재동기화 실패', message: err?.message || String(err) });
+    const site = await ctx.repos.sites.get(req.params.id);
+    if (!site) {
+      res.status(404).json({ error: '현장을 찾을 수 없습니다.' });
+      return;
     }
+
+    // Reset the counter so a manual retry gets a fresh set of attempts.
+    site.attempts = 0;
+    site.status = 'QUEUED';
+    site.syncMessage = '재시도 요청됨. 순서를 기다리는 중입니다.';
+    await ctx.repos.sites.save(site);
+
+    ctx.worker.enqueue({
+      siteId: site.id,
+      clientIp: clientIp(req),
+      userAgent: String(req.headers['user-agent'] || ''),
+    });
+
+    res.json({ site });
   });
 
   /** Streams one attachment back from SharePoint (or the test library). */
@@ -244,6 +265,68 @@ export function createAdminRouter(ctx: AppContext): Router {
   router.delete('/issues/:id', async (req, res) => {
     await ctx.repos.issues.remove(req.params.id);
     res.json({ success: true });
+  });
+
+  /* ---------------------------------------------------------------- */
+  /* Admin accounts (master only)                                      */
+  /* ---------------------------------------------------------------- */
+
+  /** Turns an AdminError into its intended status instead of a blanket 500. */
+  const handleAdminError = (err: unknown, res: Response) => {
+    if (err instanceof AdminError) {
+      res.status(err.status).json({ error: '계정 관리 오류', message: err.message });
+      return;
+    }
+    console.error('[admin] 계정 관리 실패', err);
+    res.status(500).json({ error: '계정 관리 실패', message: '요청을 처리하지 못했습니다.' });
+  };
+
+  router.get('/accounts', requireMaster, async (_req, res) => {
+    try {
+      res.json({ accounts: await ctx.directory.list() });
+    } catch (err) {
+      handleAdminError(err, res);
+    }
+  });
+
+  router.post('/accounts', requireMaster, async (req, res) => {
+    try {
+      const account = await ctx.directory.create({
+        username: cleanText(req.body?.username, 32),
+        displayName: cleanText(req.body?.displayName, 40),
+        password: String(req.body?.password || ''),
+        createdBy: req.admin?.username || 'master',
+      });
+      res.status(201).json({ account });
+    } catch (err) {
+      handleAdminError(err, res);
+    }
+  });
+
+  router.patch('/accounts/:username', requireMaster, async (req, res) => {
+    try {
+      const { username } = req.params;
+
+      if (typeof req.body?.disabled === 'boolean') {
+        await ctx.directory.setDisabled(username, req.body.disabled);
+      }
+      if (typeof req.body?.password === 'string' && req.body.password) {
+        await ctx.directory.resetPassword(username, req.body.password);
+      }
+
+      res.json({ accounts: await ctx.directory.list() });
+    } catch (err) {
+      handleAdminError(err, res);
+    }
+  });
+
+  router.delete('/accounts/:username', requireMaster, async (req, res) => {
+    try {
+      await ctx.directory.remove(req.params.username);
+      res.json({ accounts: await ctx.directory.list() });
+    } catch (err) {
+      handleAdminError(err, res);
+    }
   });
 
   return router;

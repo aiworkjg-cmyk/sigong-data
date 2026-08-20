@@ -16,7 +16,8 @@ export interface SiteFile {
   mimeType: string;
   size: number;
   sizeFormatted: string;
-  status: 'completed' | 'failed';
+  /** pending = staged on the server, not yet written to the library. */
+  status: 'pending' | 'completed' | 'failed';
   /** Path inside the document library, e.g. "시공현장자료/2026-08/.../첨부파일/01_a.jpg". */
   remotePath?: string;
   /** SharePoint web URL, when the live sync returned one. */
@@ -24,10 +25,19 @@ export interface SiteFile {
   errorMessage?: string;
 }
 
-export type SiteStatus = 'COMPLETED' | 'PARTIAL' | 'FAILED' | 'PENDING';
+/**
+ * Submissions are accepted before they are filed, so the record moves through
+ * QUEUED -> PROCESSING -> a terminal state while the submitter is already gone.
+ */
+export type SiteStatus = 'QUEUED' | 'PROCESSING' | 'COMPLETED' | 'PARTIAL' | 'FAILED';
+
+/** A terminal state means the background worker is finished with the record. */
+export const TERMINAL_STATUSES: SiteStatus[] = ['COMPLETED', 'PARTIAL', 'FAILED'];
 
 export interface SiteRecord {
   id: string;
+  /** Product line, chosen from the configured list (백조 / 인덕션 / ...). */
+  constructionType: string;
   managerName: string;
   address: string;
   constructionDate: string; // YYYY-MM-DD
@@ -43,6 +53,8 @@ export interface SiteRecord {
   syncedAt?: string;
   /** Set while attachments remain staged on disk awaiting a retry. */
   retryAvailable?: boolean;
+  /** How many times the background worker has attempted this submission. */
+  attempts?: number;
   files: SiteFile[];
 }
 
@@ -53,6 +65,7 @@ export interface UploadLog {
   id: string;
   at: string; // ISO
   siteId: string;
+  constructionType: string;
   managerName: string;
   address: string;
   fileCount: number;
@@ -130,11 +143,46 @@ export interface UploadProgressItem {
   error?: string;
 }
 
+/**
+ * MASTER is the single env-configured account: it can manage other admins and
+ * cannot be deleted. ADMIN accounts are stored in the record backend and can do
+ * everything except manage accounts.
+ */
+export type AdminRole = 'MASTER' | 'ADMIN';
+
 export interface AdminSession {
   username: string;
   displayName: string;
+  role: AdminRole;
   /** ISO expiry of the signed session cookie. */
   expiresAt: string;
+}
+
+/** An additional admin account. The password hash never leaves the server. */
+export interface AdminUser {
+  username: string;
+  displayName: string;
+  role: AdminRole;
+  createdAt: string;
+  createdBy: string;
+  disabled: boolean;
+  lastLoginAt?: string;
+}
+
+/** Public-facing progress for the submitter's confirmation screen. */
+export interface SubmissionStatus {
+  id: string;
+  status: SiteStatus;
+  totalFiles: number;
+  storedFiles: number;
+  message: string;
+}
+
+export interface PublicConfig {
+  mode: StorageMode;
+  constructionTypes: string[];
+  maxFiles: number;
+  maxFileSizeMb: number;
 }
 
 export interface Paged<T> {

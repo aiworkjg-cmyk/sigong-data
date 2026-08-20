@@ -1,12 +1,15 @@
 import type {
   AdminSession,
+  AdminUser,
   FolderEntry,
   Issue,
   IssuePriority,
   IssueStatus,
   Paged,
+  PublicConfig,
   SharePointConfigStatus,
   SiteRecord,
+  SubmissionStatus,
   UploadLog,
 } from './types';
 
@@ -52,16 +55,16 @@ function query(params: Record<string, string | number | undefined>): string {
 /* Public                                                              */
 /* ------------------------------------------------------------------ */
 
-export interface PublicStatus {
-  mode: 'LIVE' | 'TEST_MODE';
-  rootFolder: string;
-  message: string;
-  maxFiles: number;
-  maxFileSizeMb: number;
-}
-
 export const publicApi = {
-  status: () => request<PublicStatus>('/api/status'),
+  /** Selectable 시공종류 and upload limits, used to render the form. */
+  config: () => request<PublicConfig>('/api/config'),
+
+  /**
+   * Filing happens after the response, so the confirmation screen polls this
+   * to tell the submitter whether their files actually landed.
+   */
+  submissionStatus: (siteId: string) =>
+    request<SubmissionStatus>(`/api/sites/${encodeURIComponent(siteId)}/status`),
 };
 
 /* ------------------------------------------------------------------ */
@@ -72,6 +75,8 @@ export interface Diagnostics {
   sharePoint: SharePointConfigStatus;
   connectivity: { ok: boolean; driveName?: string; webUrl?: string; error?: string } | null;
   recordBackend: 'AZURE_TABLES' | 'LOCAL_JSON';
+  constructionTypes: string[];
+  mail: { configured: boolean; sender: string; recipients: string[] };
   warnings: string[];
 }
 
@@ -139,6 +144,27 @@ export const adminApi = {
 
   deleteIssue: (id: string) =>
     request<{ success: boolean }>(`/api/admin/issues/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    }),
+
+  /* Account management — master account only; others receive 403. */
+
+  accounts: () => request<{ accounts: AdminUser[] }>('/api/admin/accounts'),
+
+  createAccount: (input: { username: string; displayName: string; password: string }) =>
+    request<{ account: AdminUser }>('/api/admin/accounts', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+
+  updateAccount: (username: string, patch: { disabled?: boolean; password?: string }) =>
+    request<{ accounts: AdminUser[] }>(`/api/admin/accounts/${encodeURIComponent(username)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    }),
+
+  deleteAccount: (username: string) =>
+    request<{ accounts: AdminUser[] }>(`/api/admin/accounts/${encodeURIComponent(username)}`, {
       method: 'DELETE',
     }),
 };

@@ -1,9 +1,12 @@
 import { TableClient, TableServiceClient, odata } from '@azure/data-tables';
 import { DefaultAzureCredential } from '@azure/identity';
 import { config } from '../config';
+import { TERMINAL_STATUSES } from '../../src/types';
 import type { Issue, Paged, SiteRecord, UploadLog } from '../../src/types';
 import {
   descendingKey,
+  type AdminUserRepository,
+  type StoredAdminUser,
   type IssueFilter,
   type IssueRepository,
   type ListOptions,
@@ -17,6 +20,7 @@ import {
 const SITES_PARTITION = 'SITE';
 const LOGS_PARTITION = 'LOG';
 const ISSUES_PARTITION = 'ISSUE';
+const ADMINS_PARTITION = 'ADMIN';
 const DEFAULT_LIMIT = 50;
 
 function tableName(suffix: string): string {
@@ -90,6 +94,7 @@ function siteToEntity(site: SiteRecord) {
     // Descending key keeps listings newest-first without a client-side sort.
     rowKey: descendingKey(site.createdAt),
     siteId: site.id,
+    constructionType: site.constructionType,
     managerName: site.managerName,
     address: site.address,
     constructionDate: site.constructionDate,
@@ -103,6 +108,7 @@ function siteToEntity(site: SiteRecord) {
     syncMessage: site.syncMessage || '',
     syncedAt: site.syncedAt || '',
     retryAvailable: Boolean(site.retryAvailable),
+    attempts: site.attempts ?? 0,
     // Table Storage has no nested types; the file list rides along as JSON.
     filesJson: JSON.stringify(site.files || []),
   };
@@ -111,6 +117,7 @@ function siteToEntity(site: SiteRecord) {
 function entityToSite(entity: any): SiteRecord {
   return {
     id: entity.siteId,
+    constructionType: entity.constructionType || '',
     managerName: entity.managerName || '',
     address: entity.address || '',
     constructionDate: entity.constructionDate || '',
@@ -124,6 +131,7 @@ function entityToSite(entity: any): SiteRecord {
     syncMessage: entity.syncMessage || undefined,
     syncedAt: entity.syncedAt || undefined,
     retryAvailable: Boolean(entity.retryAvailable),
+    attempts: Number(entity.attempts) || 0,
     files: entity.filesJson ? JSON.parse(entity.filesJson) : [],
   };
 }
@@ -188,6 +196,84 @@ class TableSiteRepository implements SiteRepository {
     this.rowKeys.set(record.id, entity.rowKey);
     await this.client.upsertEntity(entity, 'Replace');
   }
+
+  async listUnfinished(limit = 200): Promise<SiteRecord[]> {
+    // Small set by design — anything lingering here is work still owed.
+    const terminal = TERMINAL_STATUSES.map((status) => `status ne '${status}'`).join(' and ');
+    const iterator = this.client.listEntities({
+      queryOptions: { filter: `PartitionKey eq '${SITES_PARTITION}' and ${terminal}` },
+    });
+
+    const pending: SiteRecord[] = [];
+    for await (const entity of iterator) {
+      this.rowKeys.set(entity.siteId as string, entity.rowKey as string);
+      pending.push(entityToSite(entity));
+      if (pending.length >= limit) break;
+    }
+    // Oldest first so a backlog drains in submission order.
+    return pending.reverse();
+  }
+}
+
+class TableAdminUserRepository implements AdminUserRepository {
+  constructor(private readonly client: TableClient) {}
+
+  async list(): Promise<StoredAdminUser[]> {
+    const iterator = this.client.listEntities({
+      queryOptions: { filter: odata`PartitionKey eq ${ADMINS_PARTITION}` },
+    });
+
+    const users: StoredAdminUser[] = [];
+    for await (const entity of iterator) {
+      users.push(entityToAdminUser(entity));
+    }
+    return users.sort((a, b) => a.username.localeCompare(b.username));
+  }
+
+  async get(username: string): Promise<StoredAdminUser | null> {
+    try {
+      return entityToAdminUser(await this.client.getEntity(ADMINS_PARTITION, username));
+    } catch (err: any) {
+      if (err?.statusCode === 404) return null;
+      throw err;
+    }
+  }
+
+  async save(user: StoredAdminUser): Promise<void> {
+    await this.client.upsertEntity(
+      {
+        partitionKey: ADMINS_PARTITION,
+        rowKey: user.username,
+        displayName: user.displayName,
+        passwordHash: user.passwordHash,
+        createdAt: user.createdAt,
+        createdBy: user.createdBy,
+        disabled: user.disabled,
+        lastLoginAt: user.lastLoginAt || '',
+      },
+      'Replace'
+    );
+  }
+
+  async remove(username: string): Promise<void> {
+    try {
+      await this.client.deleteEntity(ADMINS_PARTITION, username);
+    } catch (err: any) {
+      if (err?.statusCode !== 404) throw err;
+    }
+  }
+}
+
+function entityToAdminUser(entity: any): StoredAdminUser {
+  return {
+    username: entity.rowKey,
+    displayName: entity.displayName || entity.rowKey,
+    passwordHash: entity.passwordHash || '',
+    createdAt: entity.createdAt,
+    createdBy: entity.createdBy || '',
+    disabled: Boolean(entity.disabled),
+    lastLoginAt: entity.lastLoginAt || undefined,
+  };
 }
 
 /* ------------------------------------------------------------------ */
@@ -204,6 +290,7 @@ class TableUploadLogRepository implements UploadLogRepository {
       logId: log.id,
       at: log.at,
       siteId: log.siteId,
+      constructionType: log.constructionType,
       managerName: log.managerName,
       address: log.address,
       fileCount: log.fileCount,
@@ -233,6 +320,7 @@ class TableUploadLogRepository implements UploadLogRepository {
         id: entity.logId,
         at: entity.at,
         siteId: entity.siteId || '',
+        constructionType: entity.constructionType || '',
         managerName: entity.managerName || '',
         address: entity.address || '',
         fileCount: Number(entity.fileCount) || 0,
@@ -357,6 +445,7 @@ export async function createTableRepositories(): Promise<Repositories> {
     sites: tableName('Sites'),
     logs: tableName('UploadLogs'),
     issues: tableName('Issues'),
+    admins: tableName('Admins'),
   };
 
   await ensureTables(Object.values(names));
@@ -365,6 +454,7 @@ export async function createTableRepositories(): Promise<Repositories> {
     sites: new TableSiteRepository(createClient(names.sites)),
     logs: new TableUploadLogRepository(createClient(names.logs)),
     issues: new TableIssueRepository(createClient(names.issues)),
+    admins: new TableAdminUserRepository(createClient(names.admins)),
     backend: 'AZURE_TABLES',
   };
 }

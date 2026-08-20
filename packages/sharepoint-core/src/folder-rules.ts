@@ -20,16 +20,24 @@ export interface FolderRule {
   maxSegmentLength: number;
 }
 
+/**
+ * 시공현장자료 / 백조 / 2026 / 08월 / 0811_경기광명시하안로60광명SK테크노파크
+ *
+ * Attachments land directly in the dated site folder; there is no extra
+ * subfolder level below it.
+ */
 export const DEFAULT_RULE: FolderRule = {
   root: '시공현장자료',
-  segments: ['{yyyy}-{MM}', '{date}_{address}_{manager}'],
-  attachmentsFolder: '첨부파일',
+  segments: ['{type}', '{yyyy}', '{MM}월', '{MMdd}_{addressCompact}'],
+  attachmentsFolder: null,
   metadataFileName: '현장정보.json',
   maxSegmentLength: 60,
 };
 
 export interface FolderContext {
   siteId: string;
+  /** Product line the work belongs to, e.g. 백조 / 인덕션. */
+  constructionType: string;
   constructionDate: string;
   address: string;
   managerName: string;
@@ -109,9 +117,13 @@ function buildTokens(ctx: FolderContext, maxLength: number): Record<string, stri
     MM,
     dd,
     date,
+    MMdd: `${MM}${dd}`,
     'yyyy-MM': `${yyyy}-${MM}`,
     quarter: `Q${Math.floor((Number(MM) - 1) / 3) + 1}`,
+    type: ctx.constructionType,
     address: ctx.address,
+    // Whitespace removed so a full street address stays one compact component.
+    addressCompact: (ctx.address || '').replace(/\s+/g, ''),
     sido,
     sigungu,
     manager: ctx.managerName,

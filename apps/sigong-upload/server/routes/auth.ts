@@ -1,16 +1,16 @@
 import { Router } from 'express';
+import type { AppContext } from '../context';
 import {
-  authenticate,
   clearFailures,
   clearSession,
   isLockedOut,
   issueSession,
-  readSession,
   recordFailure,
+  resolveSession,
 } from '../auth';
 import { clientIp } from '../util';
 
-export function createAuthRouter(): Router {
+export function createAuthRouter(ctx: AppContext): Router {
   const router = Router();
 
   /**
@@ -18,11 +18,11 @@ export function createAuthRouter(): Router {
    * resource, so "not logged in" answers 200 with a null session — the public
    * submission page calls it on load and should not log an auth error.
    */
-  router.get('/session', (req, res) => {
-    res.json({ session: readSession(req) });
+  router.get('/session', async (req, res) => {
+    res.json({ session: await resolveSession(req, ctx.directory) });
   });
 
-  router.post('/login', (req, res) => {
+  router.post('/login', async (req, res) => {
     const ip = clientIp(req);
     const lockedFor = isLockedOut(ip);
 
@@ -34,10 +34,12 @@ export function createAuthRouter(): Router {
       return;
     }
 
-    const username = String(req.body?.username || '');
-    const password = String(req.body?.password || '');
+    const admin = await ctx.directory.authenticate(
+      String(req.body?.username || ''),
+      String(req.body?.password || '')
+    );
 
-    if (!authenticate(username, password)) {
+    if (!admin) {
       recordFailure(ip);
       // Deliberately vague: never reveal which half of the pair was wrong.
       res.status(401).json({
@@ -48,7 +50,7 @@ export function createAuthRouter(): Router {
     }
 
     clearFailures(ip);
-    res.json({ session: issueSession(res) });
+    res.json({ session: issueSession(res, admin) });
   });
 
   router.post('/logout', (_req, res) => {

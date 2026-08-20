@@ -1,7 +1,7 @@
 import crypto from 'crypto';
-import type { NextFunction, Request, Response } from 'express';
+import type { NextFunction, Request, RequestHandler, Response } from 'express';
 import { config } from './config';
-import type { AdminSession } from '../src/types';
+import type { AdminRole, AdminSession } from '../src/types';
 
 const COOKIE_NAME = 'sigong_admin';
 const SCRYPT_KEYLEN = 64;
@@ -19,7 +19,7 @@ declare global {
 /* Password hashing                                                    */
 /* ------------------------------------------------------------------ */
 
-/** Produces the `scrypt$<salt>$<hash>` string stored in ADMIN_PASSWORD_HASH. */
+/** Produces the `scrypt$<salt>$<hash>` string stored for an account. */
 export function hashPassword(password: string): string {
   const salt = crypto.randomBytes(16);
   const derived = crypto.scryptSync(password, salt, SCRYPT_KEYLEN);
@@ -52,19 +52,12 @@ export function verifyPassword(password: string, stored: string): boolean {
 
 interface SessionPayload {
   u: string;
+  r: AdminRole;
   exp: number;
 }
 
 function sign(data: string): string {
-  return crypto
-    .createHmac('sha256', config.admin.sessionSecret)
-    .update(data)
-    .digest('base64url');
-}
-
-function createToken(payload: SessionPayload): string {
-  const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
-  return `${body}.${sign(body)}`;
+  return crypto.createHmac('sha256', config.admin.sessionSecret).update(data).digest('base64url');
 }
 
 /** Verifies signature and expiry; any tampering yields null. */
@@ -81,7 +74,7 @@ function readToken(token: string): SessionPayload | null {
   try {
     const payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf-8')) as SessionPayload;
     if (typeof payload.exp !== 'number' || Date.now() >= payload.exp) return null;
-    if (payload.u !== config.admin.username) return null;
+    if (!payload.u || (payload.r !== 'MASTER' && payload.r !== 'ADMIN')) return null;
     return payload;
   } catch {
     return null;
@@ -106,11 +99,16 @@ function parseCookies(header: string | undefined): Record<string, string> {
   return jar;
 }
 
-export function issueSession(res: Response): AdminSession {
+export function issueSession(
+  res: Response,
+  admin: { username: string; displayName: string; role: AdminRole }
+): AdminSession {
   const expiresAt = Date.now() + config.admin.sessionHours * 3600 * 1000;
-  const token = createToken({ u: config.admin.username, exp: expiresAt });
+  const body = Buffer.from(
+    JSON.stringify({ u: admin.username, r: admin.role, exp: expiresAt })
+  ).toString('base64url');
 
-  res.cookie(COOKIE_NAME, token, {
+  res.cookie(COOKIE_NAME, `${body}.${sign(body)}`, {
     httpOnly: true,
     sameSite: 'lax',
     secure: config.admin.secureCookie,
@@ -119,8 +117,9 @@ export function issueSession(res: Response): AdminSession {
   });
 
   return {
-    username: config.admin.username,
-    displayName: config.admin.displayName,
+    username: admin.username,
+    displayName: admin.displayName,
+    role: admin.role,
     expiresAt: new Date(expiresAt).toISOString(),
   };
 }
@@ -134,7 +133,10 @@ export function clearSession(res: Response): void {
   });
 }
 
-export function readSession(req: Request): AdminSession | null {
+/** Reads the cookie only — does not confirm the account still exists. */
+export function readSessionToken(
+  req: Request
+): { username: string; role: AdminRole; expiresAt: string } | null {
   if (!config.admin.sessionSecret) return null;
 
   const token = parseCookies(req.headers.cookie)[COOKIE_NAME];
@@ -145,19 +147,65 @@ export function readSession(req: Request): AdminSession | null {
 
   return {
     username: payload.u,
-    displayName: config.admin.displayName,
+    role: payload.r,
     expiresAt: new Date(payload.exp).toISOString(),
   };
 }
 
+/** Directory lookup used to confirm a session's account is still active. */
+export interface SessionResolver {
+  resolveActive(
+    username: string
+  ): Promise<{ username: string; displayName: string; role: AdminRole } | null>;
+}
+
+/**
+ * Resolves the session and confirms the account is still enabled, so disabling
+ * or deleting an admin takes effect without waiting for the cookie to expire.
+ */
+export async function resolveSession(
+  req: Request,
+  directory: SessionResolver
+): Promise<AdminSession | null> {
+  const token = readSessionToken(req);
+  if (!token) return null;
+
+  const active = await directory.resolveActive(token.username);
+  if (!active) return null;
+
+  return {
+    username: active.username,
+    displayName: active.displayName,
+    role: active.role,
+    expiresAt: token.expiresAt,
+  };
+}
+
 /** Rejects unauthenticated requests to every /api/admin route. */
-export function requireAdmin(req: Request, res: Response, next: NextFunction): void {
-  const session = readSession(req);
-  if (!session) {
-    res.status(401).json({ error: '인증 필요', message: '관리자 로그인이 필요합니다.' });
+export function requireAdmin(directory: SessionResolver): RequestHandler {
+  return (req: Request, res: Response, next: NextFunction) => {
+    resolveSession(req, directory)
+      .then((session) => {
+        if (!session) {
+          res.status(401).json({ error: '인증 필요', message: '관리자 로그인이 필요합니다.' });
+          return;
+        }
+        req.admin = session;
+        next();
+      })
+      .catch(next);
+  };
+}
+
+/** Restricts account-management routes to the master account. */
+export function requireMaster(req: Request, res: Response, next: NextFunction): void {
+  if (req.admin?.role !== 'MASTER') {
+    res.status(403).json({
+      error: '권한 없음',
+      message: '계정 관리는 마스터 관리자만 사용할 수 있습니다.',
+    });
     return;
   }
-  req.admin = session;
   next();
 }
 
@@ -195,19 +243,4 @@ export function recordFailure(key: string): void {
 
 export function clearFailures(key: string): void {
   attempts.delete(key);
-}
-
-/** Verifies a login attempt against the single configured admin account. */
-export function authenticate(username: string, password: string): boolean {
-  if (!config.admin.passwordHash) return false;
-
-  const userBuf = Buffer.from(username || '');
-  const expectedBuf = Buffer.from(config.admin.username);
-  const userMatches =
-    userBuf.length === expectedBuf.length && crypto.timingSafeEqual(userBuf, expectedBuf);
-
-  // Always run the password KDF so a wrong username is not distinguishable by
-  // response time from a wrong password.
-  const passwordMatches = verifyPassword(password || '', config.admin.passwordHash);
-  return userMatches && passwordMatches;
 }

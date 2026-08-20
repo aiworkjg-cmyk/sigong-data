@@ -1,13 +1,16 @@
 import fs from 'fs';
 import path from 'path';
 import { config } from '../config';
+import { TERMINAL_STATUSES } from '../../src/types';
 import type { Issue, Paged, SiteRecord, UploadLog } from '../../src/types';
 import type {
+  AdminUserRepository,
   IssueFilter,
   IssueRepository,
   ListOptions,
   Repositories,
   SiteRepository,
+  StoredAdminUser,
   UploadLogFilter,
   UploadLogRepository,
   UploadLogSummary,
@@ -101,6 +104,34 @@ class JsonSiteRepository implements SiteRepository {
   async save(record: SiteRecord): Promise<void> {
     await this.collection.upsert(record, (site) => site.id === record.id);
   }
+
+  async listUnfinished(limit = 200): Promise<SiteRecord[]> {
+    return this.collection
+      .all()
+      .filter((site) => !TERMINAL_STATUSES.includes(site.status))
+      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
+      .slice(0, limit);
+  }
+}
+
+class JsonAdminUserRepository implements AdminUserRepository {
+  constructor(private readonly collection: JsonCollection<StoredAdminUser>) {}
+
+  async list(): Promise<StoredAdminUser[]> {
+    return [...this.collection.all()].sort((a, b) => a.username.localeCompare(b.username));
+  }
+
+  async get(username: string): Promise<StoredAdminUser | null> {
+    return this.collection.all().find((user) => user.username === username) ?? null;
+  }
+
+  async save(user: StoredAdminUser): Promise<void> {
+    await this.collection.upsert(user, (candidate) => candidate.username === user.username);
+  }
+
+  async remove(username: string): Promise<void> {
+    await this.collection.remove((user) => user.username === username);
+  }
 }
 
 class JsonUploadLogRepository implements UploadLogRepository {
@@ -171,6 +202,7 @@ export function createJsonRepositories(): Repositories {
     sites: new JsonSiteRepository(new JsonCollection(path.join(dir, 'sites.json'))),
     logs: new JsonUploadLogRepository(new JsonCollection(path.join(dir, 'upload-logs.json'))),
     issues: new JsonIssueRepository(new JsonCollection(path.join(dir, 'issues.json'))),
+    admins: new JsonAdminUserRepository(new JsonCollection(path.join(dir, 'admin-users.json'))),
     backend: 'LOCAL_JSON',
   };
 }

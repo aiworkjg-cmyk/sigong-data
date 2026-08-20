@@ -9,6 +9,11 @@ export interface SiteRepository {
   list(options?: ListOptions): Promise<Paged<SiteRecord>>;
   get(id: string): Promise<SiteRecord | null>;
   save(record: SiteRecord): Promise<void>;
+  /**
+   * Submissions that were accepted but never reached a terminal state — used on
+   * boot to re-queue work that a restart interrupted mid-upload.
+   */
+  listUnfinished(limit?: number): Promise<SiteRecord[]>;
 }
 
 export interface UploadLogFilter extends ListOptions {
@@ -46,10 +51,40 @@ export interface IssueRepository {
   remove(id: string): Promise<void>;
 }
 
+/**
+ * An admin account held in the record backend. The master account is not stored
+ * here — it comes from environment configuration and always exists, so losing
+ * the table can never lock everyone out. passwordHash stays server-side.
+ */
+export interface StoredAdminUser {
+  username: string;
+  displayName: string;
+  passwordHash: string;
+  createdAt: string;
+  createdBy: string;
+  disabled: boolean;
+  lastLoginAt?: string;
+}
+
+export interface AdminUserRepository {
+  list(): Promise<StoredAdminUser[]>;
+  get(username: string): Promise<StoredAdminUser | null>;
+  save(user: StoredAdminUser): Promise<void>;
+  remove(username: string): Promise<void>;
+}
+
+/** Submissions still awaiting (or retrying) their upload to the library. */
+export interface PendingSubmission {
+  siteId: string;
+  attempts: number;
+  nextAttemptAt: string;
+}
+
 export interface Repositories {
   sites: SiteRepository;
   logs: UploadLogRepository;
   issues: IssueRepository;
+  admins: AdminUserRepository;
   /** Which backend is actually in use, surfaced in the admin diagnostics. */
   backend: 'AZURE_TABLES' | 'LOCAL_JSON';
 }

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   CheckCircle,
   FolderCheck,
@@ -11,9 +11,13 @@ import {
   PlusCircle,
   Image,
   Video,
+  Loader2,
+  AlertTriangle,
   ExternalLink
 } from 'lucide-react';
-import { SiteRecord } from '../types';
+import { SiteRecord, SubmissionStatus } from '../types';
+import { publicApi } from '../api';
+import { statusMeta } from '../status';
 
 interface SubmissionSuccessViewProps {
   site: SiteRecord;
@@ -25,6 +29,33 @@ export const SubmissionSuccessView: React.FC<SubmissionSuccessViewProps> = ({
   onNewSubmission,
 }) => {
   const [copiedId, setCopiedId] = useState(false);
+
+  // Filing into the library continues after the response, so the submitter is
+  // shown live progress instead of a completion claim that may not hold.
+  const [progress, setProgress] = useState<SubmissionStatus | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+
+    const poll = async () => {
+      try {
+        const next = await publicApi.submissionStatus(site.id);
+        if (cancelled) return;
+        setProgress(next);
+        if (statusMeta(next.status).inFlight) timer = setTimeout(poll, 3000);
+      } catch {
+        // A transient failure just means the next tick tries again.
+        if (!cancelled) timer = setTimeout(poll, 8000);
+      }
+    };
+
+    void poll();
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [site.id]);
 
   const handleCopyId = () => {
     navigator.clipboard.writeText(site.id);
@@ -46,7 +77,8 @@ export const SubmissionSuccessView: React.FC<SubmissionSuccessViewProps> = ({
           현장자료 제출이 완료되었습니다
         </h2>
         <p className="text-sm text-slate-600 max-w-md mx-auto leading-relaxed">
-          입력하신 현장 정보와 첨부파일이 안전하게 저장되었으며, Microsoft SharePoint 현장 전용 폴더에 분류되었습니다.
+          제출하신 현장 정보와 첨부파일이 정상적으로 접수되었습니다.
+          이 화면을 닫으셔도 보관 처리는 계속 진행됩니다.
         </p>
 
         <div className="mt-4 inline-flex items-center gap-2 px-3.5 py-1.5 bg-slate-100 rounded-full text-xs font-mono text-slate-700">
@@ -103,27 +135,71 @@ export const SubmissionSuccessView: React.FC<SubmissionSuccessViewProps> = ({
             </div>
           )}
 
-          {/* Storage confirmation — the internal folder path is deliberately
-              not shown here, since this page is opened by external submitters. */}
+          {/* Live filing progress. The internal folder path is deliberately not
+              shown here, since this page is opened by external submitters. */}
           <div className="bg-blue-50/70 p-3.5 rounded-lg border border-blue-200 sm:col-span-2">
             <span className="text-xs text-blue-900 font-bold flex items-center gap-1.5 mb-1">
               <FolderCheck className="w-4 h-4 text-blue-700" />
-              저장 상태
+              보관 상태
             </span>
-            <p className="text-xs text-blue-950 leading-relaxed">
-              {site.status === 'COMPLETED'
-                ? '제출하신 자료가 회사 저장소의 현장별 폴더에 자동으로 분류·보관되었습니다.'
-                : '자료는 정상적으로 접수되었습니다. 일부 파일의 보관 처리가 진행 중이며, 관리자가 확인 후 마무리합니다.'}
-            </p>
+
+            <div className="flex items-start gap-2">
+              {progress && statusMeta(progress.status).inFlight && (
+                <Loader2 className="w-4 h-4 text-blue-600 animate-spin shrink-0 mt-0.5" />
+              )}
+              {progress?.status === 'FAILED' || progress?.status === 'PARTIAL' ? (
+                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+              ) : null}
+              <p className="text-xs text-blue-950 leading-relaxed">
+                {progress?.message || '접수되었습니다. 보관 상태를 확인하는 중입니다.'}
+              </p>
+            </div>
+
+            {progress && progress.totalFiles > 0 && (
+              <div className="mt-2.5">
+                <div className="h-1.5 bg-white rounded-full overflow-hidden border border-blue-100">
+                  <div
+                    className={`h-full transition-all duration-500 ${
+                      progress.status === 'FAILED'
+                        ? 'bg-red-500'
+                        : progress.status === 'PARTIAL'
+                          ? 'bg-amber-500'
+                          : 'bg-blue-600'
+                    }`}
+                    style={{
+                      width: `${Math.round((progress.storedFiles / progress.totalFiles) * 100)}%`,
+                    }}
+                  />
+                </div>
+                <p className="mt-1 text-[11px] text-blue-800">
+                  보관 완료 {progress.storedFiles} / {progress.totalFiles}개
+                </p>
+              </div>
+            )}
+
             <div className="mt-2 flex items-center justify-between text-[11px] text-blue-800">
               <span>
-                동기화 상태:{' '}
-                <strong className={site.status === 'COMPLETED' ? 'text-emerald-700' : 'text-amber-700'}>
-                  {site.status === 'COMPLETED' ? '저장 완료' : '처리 중'}
+                상태:{' '}
+                <strong
+                  className={
+                    progress?.status === 'COMPLETED'
+                      ? 'text-emerald-700'
+                      : progress?.status === 'FAILED'
+                        ? 'text-red-700'
+                        : 'text-amber-700'
+                  }
+                >
+                  {statusMeta(progress?.status ?? 'QUEUED').label}
                 </strong>
               </span>
               <span>제출일시: {new Date(site.createdAt).toLocaleString('ko-KR')}</span>
             </div>
+
+            {(progress?.status === 'FAILED' || progress?.status === 'PARTIAL') && (
+              <p className="mt-2 p-2 rounded bg-amber-50 border border-amber-200 text-[11px] text-amber-900">
+                담당 관리자에게 자동으로 알림이 전송되었습니다. 현장 ID를 함께 알려 주시면 처리가 빠릅니다.
+              </p>
+            )}
           </div>
         </div>
 
@@ -131,7 +207,7 @@ export const SubmissionSuccessView: React.FC<SubmissionSuccessViewProps> = ({
         <div className="pt-2">
           <div className="flex items-center justify-between mb-3">
             <span className="text-xs font-bold text-slate-800">
-              저장된 첨부파일 (총 {site.files.length}개 / 사진 {photoCount}, 영상 {videoCount})
+              제출한 첨부파일 (총 {site.files.length}개 / 사진 {photoCount}, 영상 {videoCount})
             </span>
           </div>
 

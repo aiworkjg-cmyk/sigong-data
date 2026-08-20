@@ -8,8 +8,7 @@ import {
   ScrollText,
   ShieldCheck,
 } from 'lucide-react';
-import type { AdminSession } from '../types';
-import type { PublicStatus } from '../api';
+import type { AdminSession, PublicConfig } from '../types';
 
 export type AppView =
   | 'register'
@@ -18,27 +17,37 @@ export type AppView =
   | 'admin-sites'
   | 'admin-detail'
   | 'admin-logs'
-  | 'admin-issues';
+  | 'admin-issues'
+  | 'admin-accounts';
 
 interface HeaderProps {
   currentView: AppView;
   session: AdminSession | null;
-  status: PublicStatus | null;
+  config: PublicConfig | null;
   onNavigate: (view: AppView) => void;
   onOpenDiagnostics: () => void;
   onLogout: () => void;
 }
 
-const ADMIN_TABS: Array<{ view: AppView; label: string; Icon: typeof ShieldCheck }> = [
+interface AdminTab {
+  view: AppView;
+  label: string;
+  Icon: typeof ShieldCheck;
+  /** Account management is master-only, so the tab is hidden for others. */
+  masterOnly?: boolean;
+}
+
+const ADMIN_TABS: AdminTab[] = [
   { view: 'admin-sites', label: '현장 목록', Icon: HardHat },
   { view: 'admin-logs', label: '업로드 로그', Icon: ScrollText },
   { view: 'admin-issues', label: '이슈 관리', Icon: AlertTriangle },
+  { view: 'admin-accounts', label: '계정 관리', Icon: ShieldCheck, masterOnly: true },
 ];
 
 export const Header: React.FC<HeaderProps> = ({
   currentView,
   session,
-  status,
+  config,
   onNavigate,
   onOpenDiagnostics,
   onLogout,
@@ -71,7 +80,7 @@ export const Header: React.FC<HeaderProps> = ({
               </div>
               <p className="text-xs text-slate-500 hidden md:block truncate">
                 {isAdminView
-                  ? `${session?.displayName ?? '관리자'} — 제출 자료 확인 및 저장소 관리`
+                  ? `${session?.displayName ?? '관리자'}${session?.role === 'MASTER' ? ' (마스터)' : ''} — 제출 자료 확인 및 저장소 관리`
                   : '외부 작업자용 로그인 없는 현장자료 즉시 제출 페이지'}
               </p>
             </div>
@@ -110,10 +119,10 @@ export const Header: React.FC<HeaderProps> = ({
               </>
             ) : (
               <>
-                {status && (
+                {config && (
                   <span className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium bg-slate-100 text-slate-600 border border-slate-300">
                     <FolderTree className="w-3.5 h-3.5 text-blue-600" />
-                    {status.mode === 'LIVE' ? '클라우드 저장 연동됨' : '테스트 저장 모드'}
+                    {config.mode === 'LIVE' ? '클라우드 저장 연동됨' : '테스트 저장 모드'}
                   </span>
                 )}
                 <button
@@ -132,7 +141,7 @@ export const Header: React.FC<HeaderProps> = ({
         {/* Admin section tabs */}
         {isAdminView && (
           <nav className="flex items-center gap-1 -mb-px overflow-x-auto">
-            {ADMIN_TABS.map(({ view, label, Icon }) => {
+            {ADMIN_TABS.filter((tab) => !tab.masterOnly || session?.role === 'MASTER').map(({ view, label, Icon }) => {
               // The detail page belongs to the sites tab.
               const active =
                 currentView === view || (view === 'admin-sites' && currentView === 'admin-detail');

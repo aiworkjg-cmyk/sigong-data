@@ -64,8 +64,9 @@ export class SharePointService {
     const example = resolveFolder(
       {
         siteId: 'SITE-20260814-0001',
-        constructionDate: '2026-08-14',
-        address: '경기 광명시 하안로 60',
+        constructionType: '백조',
+        constructionDate: '2026-08-11',
+        address: '경기 광명시 하안로 60 광명SK테크노파크',
         managerName: '홍길동',
         submittedAt: new Date().toISOString(),
       },
@@ -102,6 +103,7 @@ export class SharePointService {
     return resolveFolder(
       {
         siteId: submission.id,
+        constructionType: submission.constructionType,
         constructionDate: submission.constructionDate,
         address: submission.address,
         managerName: submission.managerName,
@@ -115,6 +117,7 @@ export class SharePointService {
     return JSON.stringify(
       {
         현장고유ID: submission.id,
+        시공종류: submission.constructionType,
         담당자: submission.managerName,
         주소: submission.address,
         시공일: submission.constructionDate,

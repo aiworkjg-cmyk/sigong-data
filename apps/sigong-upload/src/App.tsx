@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { ApiError, adminApi, publicApi, type PublicStatus } from './api';
-import type { AdminSession, SiteFile, SiteRecord, UploadProgressItem } from './types';
+import { ApiError, adminApi, publicApi } from './api';
+import type { AdminSession, PublicConfig, SiteFile, SiteRecord, UploadProgressItem } from './types';
 import { Header, type AppView } from './components/Header';
 import { ExternalSubmissionForm } from './components/ExternalSubmissionForm';
 import { UploadProgressModal } from './components/UploadProgressModal';
@@ -10,12 +10,13 @@ import { AdminSiteList } from './components/AdminSiteList';
 import { AdminSiteDetail } from './components/AdminSiteDetail';
 import { AdminUploadLogs } from './components/AdminUploadLogs';
 import { AdminIssues } from './components/AdminIssues';
+import { AdminAccounts } from './components/AdminAccounts';
 import { MediaViewerModal } from './components/MediaViewerModal';
 import { AdminDiagnosticsModal } from './components/AdminDiagnosticsModal';
 
 export default function App() {
   const [currentView, setCurrentView] = useState<AppView>('register');
-  const [status, setStatus] = useState<PublicStatus | null>(null);
+  const [publicConfig, setPublicConfig] = useState<PublicConfig | null>(null);
 
   // Admin state
   const [session, setSession] = useState<AdminSession | null>(null);
@@ -42,7 +43,7 @@ export default function App() {
   /* ---------------------------------------------------------------- */
 
   useEffect(() => {
-    publicApi.status().then(setStatus).catch(() => setStatus(null));
+    publicApi.config().then(setPublicConfig).catch(() => setPublicConfig(null));
 
     // Restore an existing admin session so a refresh does not force a re-login.
     adminApi
@@ -115,6 +116,7 @@ export default function App() {
   /* ---------------------------------------------------------------- */
 
   const handleSiteSubmit = (formData: {
+    constructionType: string;
     managerName: string;
     address: string;
     constructionDate: string;
@@ -137,6 +139,7 @@ export default function App() {
     );
 
     const body = new FormData();
+    body.append('constructionType', formData.constructionType);
     body.append('managerName', formData.managerName);
     body.append('address', formData.address);
     body.append('constructionDate', formData.constructionDate);
@@ -148,9 +151,10 @@ export default function App() {
     xhr.upload.onprogress = (event) => {
       if (!event.lengthComputable) return;
 
-      // Transfer covers 5%–80%; the remainder is server-side cloud sync.
+      // The transfer is the whole wait now: filing into the library happens
+      // after the response, so progress can run to completion here.
       const ratio = event.loaded / event.total;
-      setOverallProgress(Math.round(5 + ratio * 75));
+      setOverallProgress(Math.round(5 + ratio * 90));
       setCurrentStage(
         `2단계: 파일 전송 중 (${(event.loaded / 1048576).toFixed(1)}MB / ${(event.total / 1048576).toFixed(1)}MB)...`
       );
@@ -184,7 +188,7 @@ export default function App() {
         } catch {
           message = `서버 오류 (${xhr.status}): ${xhr.statusText}`;
         }
-        setCurrentStage('서버 저장 및 클라우드 동기화 단계');
+        setCurrentStage('서버 접수 단계');
         setUploadError(message);
         setProgressItems((prev) =>
           prev.map((item) =>
@@ -197,7 +201,7 @@ export default function App() {
       try {
         const { site } = JSON.parse(xhr.responseText) as { site: SiteRecord };
         setOverallProgress(100);
-        setCurrentStage('3단계: 클라우드 폴더 분류 및 저장이 완료되었습니다.');
+        setCurrentStage('3단계: 제출이 접수되었습니다.');
         setProgressItems((prev) => prev.map((item) => ({ ...item, progress: 100, status: 'completed' })));
 
         // Brief pause so the completed state is actually visible.
@@ -245,7 +249,7 @@ export default function App() {
       <Header
         currentView={currentView}
         session={session}
-        status={status}
+        config={publicConfig}
         onNavigate={navigate}
         onOpenDiagnostics={() => setIsDiagnosticsOpen(true)}
         onLogout={() => void handleLogout()}
@@ -253,7 +257,11 @@ export default function App() {
 
       <main className="flex-1">
         {currentView === 'register' && (
-          <ExternalSubmissionForm onSubmit={handleSiteSubmit} isSubmitting={isSubmitting} />
+          <ExternalSubmissionForm
+            onSubmit={handleSiteSubmit}
+            isSubmitting={isSubmitting}
+            constructionTypes={publicConfig?.constructionTypes ?? []}
+          />
         )}
 
         {currentView === 'completed' && submittedSite && (
@@ -308,6 +316,10 @@ export default function App() {
             defaultSiteId={selectedSiteId ?? undefined}
             onOpenSite={(siteId) => void openSite(siteId)}
           />
+        )}
+
+        {currentView === 'admin-accounts' && session?.role === 'MASTER' && (
+          <AdminAccounts currentUsername={session.username} />
         )}
       </main>
 

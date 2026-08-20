@@ -35,8 +35,8 @@ async function startServer(): Promise<void> {
   app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
   app.use('/api', createPublicRouter(ctx));
-  app.use('/api/admin', createAuthRouter());
-  app.use('/api/admin', requireAdmin, createAdminRouter(ctx));
+  app.use('/api/admin', createAuthRouter(ctx));
+  app.use('/api/admin', requireAdmin(ctx.directory), createAdminRouter(ctx));
 
   app.use('/api', (_req, res) => {
     res.status(404).json({ error: '요청한 API를 찾을 수 없습니다.' });
@@ -66,6 +66,7 @@ async function startServer(): Promise<void> {
     console.log(`  저장 모드   : ${status.mode}`);
     console.log(`  기록 저장소 : ${ctx.repos.backend}`);
     console.log(`  분류 경로 예: ${status.examplePath}`);
+    console.log(`  시공종류    : ${config.constructionTypes.join(', ')}`);
   });
 
   // Long uploads must not be cut off by the default 2-minute header timeout.
@@ -74,6 +75,8 @@ async function startServer(): Promise<void> {
 
   const shutdown = (signal: string) => {
     console.log(`[server] ${signal} 수신 — 종료합니다.`);
+    // Stop taking new filing work; anything unfinished is re-queued on boot.
+    ctx.worker.shutdown();
     server.close(() => process.exit(0));
     // Force-exit if connections refuse to drain.
     setTimeout(() => process.exit(1), 10_000).unref();
