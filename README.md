@@ -4,7 +4,7 @@
 각 사이트는 `apps/` 아래 독립 폴더로 들어가고, 사이트들이 함께 쓰는 코드는 `packages/` 에 둡니다.
 
 ```
-C:\dev\webapps\
+C:\dev\sigongdata\
 ├─ START.cmd                    더블클릭하면 로컬 서버 실행
 ├─ apps/                        사이트(배포 단위)
 │  └─ sigong-upload/            시공현장 자료 수집·관리 시스템
@@ -110,7 +110,7 @@ Express 가 요청을 받아 `/api/*` 는 직접 처리하고, 나머지는 Vite
   필요한 키 목록은 `.env.example` 에 정리되어 있습니다.
 - **경로를 짧게 유지하세요.** Windows 의 260자 경로 제한 때문에
   `node_modules` 가 깊은 경로에 있으면 설치가 실패할 수 있습니다.
-  작업 폴더를 `C:\dev\webapps` 같은 짧은 경로에 두는 이유입니다.
+  작업 폴더를 `C:\dev\sigongdata` 같은 짧은 경로에 두는 이유입니다.
 - **OneDrive 동기화 폴더 안에 두지 마세요.** `node_modules` 동기화 때문에
   빌드가 느려지고 파일 잠금 오류가 발생합니다.
 

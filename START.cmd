@@ -51,9 +51,9 @@ echo  * 이 창을 닫으면 서버도 함께 종료됩니다.
 echo  * 종료하려면 이 창에서 Ctrl+C 를 누르세요.
 echo.
 
-rem Give the server a head start so the browser does not land on a dead port.
-rem Fully-qualified so a shadowed "timeout" on PATH cannot break the delay.
-start "" /b cmd /c "%SystemRoot%\System32	imeout.exe /t 7 /nobreak >nul & start http://localhost:3000"
+rem Delay so the browser does not land on a port that is not listening yet.
+rem Fully qualified: a "timeout" earlier on PATH would otherwise take over.
+start "" /b cmd /c "%SystemRoot%\System32\timeout.exe /t 7 /nobreak >nul & start http://localhost:3000"
 
 call npm run dev
 
