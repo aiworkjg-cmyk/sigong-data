@@ -1,0 +1,6 @@
+* text=auto
+
+# Batch files are parsed by cmd.exe in the system codepage and require CRLF.
+# Marking them binary stops git from rewriting either.
+*.cmd binary
+*.bat binary
