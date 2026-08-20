@@ -171,6 +171,14 @@ az webapp config appsettings set --name $APP --resource-group $RG --settings \
 `ADMIN_PASSWORD_HASH` 와 `ADMIN_SESSION_SECRET` 이 없으면 운영 모드에서는 서버가
 시작되지 않습니다. 관리자 화면이 무방비로 열려 있는 것보다 안전하기 때문입니다.
 
+### 추가 관리자 계정
+
+여기서 설정한 계정이 **마스터 계정**입니다. 추가 관리자는 배포 후 화면에서 만듭니다:
+관리자 로그인 → **계정 관리** 탭 → 계정 추가.
+
+추가 계정은 현장 자료·업로드 로그·이슈를 모두 볼 수 있지만 계정 관리는 할 수 없습니다.
+마스터 계정만 환경변수로 관리되므로, 저장소에 문제가 생겨도 마스터는 항상 로그인할 수 있습니다.
+
 ### Key Vault 사용 (선택, 권장)
 
 비밀값을 Key Vault 에 두고 참조 형식으로 연결할 수 있습니다.
@@ -205,22 +213,72 @@ az webapp config appsettings set --name $APP --resource-group $RG --settings \
 `DATA_DIR` 아래 동일한 폴더 구조로 저장됨). 앱 자체는 정상 동작하므로 연동 전에도
 사용해 볼 수 있습니다.
 
+### 시공종류 목록
+
+제출 화면의 선택 버튼 목록입니다. 담당자는 이 중에서만 고를 수 있고, 서버도 같은 목록으로
+검증합니다 (선택값이 폴더 이름이 되므로 임의 입력을 허용하지 않습니다).
+
+```bash
+az webapp config appsettings set --name $APP --resource-group $RG --settings CONSTRUCTION_TYPES='백조,인덕션,한샘,이펙스,워너홈'
+```
+
 ### 폴더 분류 규칙 변경
 
-기본 규칙은 `시공현장자료 / {yyyy}-{MM} / {date}_{address}_{manager} / 첨부파일` 입니다.
+기본 규칙:
+
+```
+시공현장자료 / {type} / {yyyy} / {MM}월 / {MMdd}_{addressCompact}
+예) 시공현장자료 / 백조 / 2026 / 08월 / 0811_경기광명시하안로60광명SK테크노파크
+```
+
 코드 수정 없이 환경변수로 바꿀 수 있습니다.
 
 ```bash
-az webapp config appsettings set --name $APP --resource-group $RG --settings \
-  SHAREPOINT_FOLDER_SEGMENTS='{yyyy},{quarter},{sigungu},{date}_{manager}'
+az webapp config appsettings set --name $APP --resource-group $RG --settings SHAREPOINT_FOLDER_SEGMENTS='{type},{yyyy-MM},{MMdd}_{manager}'
 ```
 
-사용 가능한 항목: `{yyyy} {MM} {dd} {date} {yyyy-MM} {quarter} {address} {sido} {sigungu} {manager} {siteId} {submittedDate}`
+사용 가능한 항목:
 
-`첨부파일` 하위 폴더나 `현장정보.json` 을 끄려면 값을 `none` 으로 지정합니다.
+| 항목 | 결과 예시 |
+|------|-----------|
+| `{type}` | 백조 |
+| `{yyyy}` `{MM}` `{dd}` `{MMdd}` | 2026 / 08 / 11 / 0811 |
+| `{date}` `{yyyy-MM}` `{quarter}` | 2026-08-11 / 2026-08 / Q3 |
+| `{address}` | 경기 광명시 하안로 60 |
+| `{addressCompact}` | 경기광명시하안로60 |
+| `{sido}` `{sigungu}` | 경기 / 광명시 |
+| `{manager}` `{siteId}` `{submittedDate}` | 홍길동 / SITE-… / 2026-08-20 |
+
+`현장정보.json` 을 만들지 않으려면 `SHAREPOINT_METADATA_FILENAME=none`,
+첨부파일용 하위 폴더를 두려면 `SHAREPOINT_ATTACHMENTS_FOLDER=첨부파일` 로 지정합니다.
 빈 값은 "끄기" 가 아니라 "기본값 사용" 을 의미합니다.
 
 변경한 규칙은 **이후 제출분부터** 적용되며, 이미 저장된 폴더는 이동하지 않습니다.
+
+---
+
+## 5-1. 업로드 실패 알림 메일
+
+자동 재시도까지 모두 실패하면 관리자에게 메일이 발송됩니다. SharePoint 연동에 쓰는 것과
+같은 Azure AD 앱을 재사용하므로 별도 메일 서비스 가입이 필요 없습니다.
+
+사전 작업 ([sharepoint-setup.md](./sharepoint-setup.md) 4단계):
+Azure AD 앱에 **Mail.Send** 애플리케이션 권한 추가 + 관리자 동의.
+
+```bash
+az webapp config appsettings set --name $APP --resource-group $RG --settings MAIL_SENDER='noreply@회사도메인.com' ADMIN_ALERT_EMAIL='관리자@회사도메인.com' APP_URL="https://$APP.azurewebsites.net"
+```
+
+`MAIL_SENDER` 는 실제 사서함이 있는 계정이어야 합니다. `ADMIN_ALERT_EMAIL` 은 쉼표로 여러 명을
+지정할 수 있습니다. 설정하지 않으면 메일만 생략되고, 실패 기록은 관리자 화면에 그대로 남습니다.
+
+### 백그라운드 저장 처리
+
+제출 즉시 응답하고 저장은 뒤에서 진행됩니다. 실패 시 자동 재시도 횟수와 간격입니다.
+
+```bash
+az webapp config appsettings set --name $APP --resource-group $RG --settings WORKER_CONCURRENCY=1 WORKER_MAX_ATTEMPTS=3 WORKER_RETRY_DELAY_MS=30000
+```
 
 ---
 
