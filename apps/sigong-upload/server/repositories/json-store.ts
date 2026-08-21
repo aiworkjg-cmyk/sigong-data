@@ -9,6 +9,7 @@ import type {
   IssueRepository,
   ListOptions,
   Repositories,
+  SettingsRepository,
   SiteRepository,
   StoredAdminUser,
   UploadLogFilter,
@@ -117,12 +118,20 @@ class JsonSiteRepository implements SiteRepository {
 class JsonAdminUserRepository implements AdminUserRepository {
   constructor(private readonly collection: JsonCollection<StoredAdminUser>) {}
 
+  /** Accounts stored before roles existed have no role field; those are 관리자. */
+  private withRole(user: StoredAdminUser): StoredAdminUser {
+    return user.role === 'STAFF' ? user : { ...user, role: 'ADMIN' };
+  }
+
   async list(): Promise<StoredAdminUser[]> {
-    return [...this.collection.all()].sort((a, b) => a.username.localeCompare(b.username));
+    return [...this.collection.all()]
+      .map((user) => this.withRole(user))
+      .sort((a, b) => a.username.localeCompare(b.username));
   }
 
   async get(username: string): Promise<StoredAdminUser | null> {
-    return this.collection.all().find((user) => user.username === username) ?? null;
+    const user = this.collection.all().find((candidate) => candidate.username === username);
+    return user ? this.withRole(user) : null;
   }
 
   async save(user: StoredAdminUser): Promise<void> {
@@ -194,6 +203,22 @@ class JsonIssueRepository implements IssueRepository {
   }
 }
 
+/**
+ * Settings live in their own tiny JSON file so a bad write can never take the
+ * record store down with it.
+ */
+class JsonSettingsRepository implements SettingsRepository {
+  constructor(private readonly collection: JsonCollection<{ key: string; value: string }>) {}
+
+  async get(key: string): Promise<string | null> {
+    return this.collection.all().find((entry) => entry.key === key)?.value ?? null;
+  }
+
+  async set(key: string, value: string): Promise<void> {
+    await this.collection.upsert({ key, value }, (entry) => entry.key === key);
+  }
+}
+
 export function createJsonRepositories(): Repositories {
   const dir = config.paths.jsonStore;
   fs.mkdirSync(dir, { recursive: true });
@@ -203,6 +228,7 @@ export function createJsonRepositories(): Repositories {
     logs: new JsonUploadLogRepository(new JsonCollection(path.join(dir, 'upload-logs.json'))),
     issues: new JsonIssueRepository(new JsonCollection(path.join(dir, 'issues.json'))),
     admins: new JsonAdminUserRepository(new JsonCollection(path.join(dir, 'admin-users.json'))),
+    settings: new JsonSettingsRepository(new JsonCollection(path.join(dir, 'settings.json'))),
     backend: 'LOCAL_JSON',
   };
 }

@@ -145,10 +145,34 @@ export interface UploadProgressItem {
 
 /**
  * MASTER is the single env-configured account: it can manage other admins and
- * cannot be deleted. ADMIN accounts are stored in the record backend and can do
- * everything except manage accounts.
+ * cannot be deleted. ADMIN and STAFF accounts are stored in the record backend.
+ *
+ *   MASTER  마스터 — everything, including account management
+ *   ADMIN   관리자 — everything except account management
+ *   STAFF   일반   — read-only: can look, cannot change anything
  */
-export type AdminRole = 'MASTER' | 'ADMIN';
+export type AdminRole = 'MASTER' | 'ADMIN' | 'STAFF';
+
+/** Roles the master can hand out when creating an account. */
+export const ASSIGNABLE_ROLES = ['ADMIN', 'STAFF'] as const;
+export type AssignableRole = (typeof ASSIGNABLE_ROLES)[number];
+
+export const ROLE_LABELS: Record<AdminRole, string> = {
+  MASTER: '마스터',
+  ADMIN: '관리자',
+  STAFF: '일반',
+};
+
+export const ROLE_DESCRIPTIONS: Record<AdminRole, string> = {
+  MASTER: '모든 기능 + 계정 관리',
+  ADMIN: '자료·이슈·설정 변경 가능 (계정 관리 불가)',
+  STAFF: '조회만 가능 (변경 불가)',
+};
+
+/** Roles allowed to change data: retry uploads, edit issues, edit settings. */
+export function canEdit(role: AdminRole | undefined): boolean {
+  return role === 'MASTER' || role === 'ADMIN';
+}
 
 export interface AdminSession {
   username: string;

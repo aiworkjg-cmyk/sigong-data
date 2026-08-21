@@ -1,7 +1,7 @@
 import { config } from './config';
 import { hashPassword, verifyPassword } from './auth';
 import type { AdminUserRepository, StoredAdminUser } from './repositories';
-import type { AdminRole, AdminUser } from '../src/types';
+import type { AdminRole, AdminUser, AssignableRole } from '../src/types';
 
 /** Usernames are used as Table Storage row keys, so keep them simple. */
 const USERNAME_PATTERN = /^[a-z0-9._-]{3,32}$/i;
@@ -97,7 +97,7 @@ export class AdminDirectory {
       .then(() => this.invalidate(name))
       .catch((err) => console.error('[auth] lastLoginAt 기록 실패', err));
 
-    return { username: user.username, displayName: user.displayName, role: 'ADMIN' };
+    return { username: user.username, displayName: user.displayName, role: user.role };
   }
 
   /** Re-checks that a session's account still exists and is still enabled. */
@@ -106,7 +106,7 @@ export class AdminDirectory {
 
     const user = await this.fetch(username);
     if (!user || user.disabled) return null;
-    return { username: user.username, displayName: user.displayName, role: 'ADMIN' };
+    return { username: user.username, displayName: user.displayName, role: user.role };
   }
 
   async list(): Promise<AdminUser[]> {
@@ -123,7 +123,7 @@ export class AdminDirectory {
       ...stored.map<AdminUser>((user) => ({
         username: user.username,
         displayName: user.displayName,
-        role: 'ADMIN',
+        role: user.role,
         createdAt: user.createdAt,
         createdBy: user.createdBy,
         disabled: user.disabled,
@@ -136,6 +136,7 @@ export class AdminDirectory {
     username: string;
     displayName: string;
     password: string;
+    role: AssignableRole;
     createdBy: string;
   }): Promise<AdminUser> {
     const username = input.username.trim();
@@ -156,6 +157,7 @@ export class AdminDirectory {
     const user: StoredAdminUser = {
       username,
       displayName: input.displayName.trim() || username,
+      role: input.role === 'STAFF' ? 'STAFF' : 'ADMIN',
       passwordHash: hashPassword(input.password),
       createdAt: new Date().toISOString(),
       createdBy: input.createdBy,
@@ -168,7 +170,7 @@ export class AdminDirectory {
     return {
       username: user.username,
       displayName: user.displayName,
-      role: 'ADMIN',
+      role: user.role,
       createdAt: user.createdAt,
       createdBy: user.createdBy,
       disabled: false,
@@ -187,6 +189,16 @@ export class AdminDirectory {
   async setDisabled(username: string, disabled: boolean): Promise<void> {
     const user = await this.requireStored(username);
     await this.repo.save({ ...user, disabled });
+    this.invalidate(username);
+  }
+
+  /** Switches an existing account between 관리자 and 일반. */
+  async setRole(username: string, role: AssignableRole): Promise<void> {
+    if (role !== 'ADMIN' && role !== 'STAFF') {
+      throw new AdminError('권한은 관리자 또는 일반 중에서 선택해 주세요.');
+    }
+    const user = await this.requireStored(username);
+    await this.repo.save({ ...user, role });
     this.invalidate(username);
   }
 

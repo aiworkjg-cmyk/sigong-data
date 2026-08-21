@@ -11,6 +11,7 @@ import {
   type IssueRepository,
   type ListOptions,
   type Repositories,
+  type SettingsRepository,
   type SiteRepository,
   type UploadLogFilter,
   type UploadLogRepository,
@@ -21,6 +22,7 @@ const SITES_PARTITION = 'SITE';
 const LOGS_PARTITION = 'LOG';
 const ISSUES_PARTITION = 'ISSUE';
 const ADMINS_PARTITION = 'ADMIN';
+const SETTINGS_PARTITION = 'SETTING';
 const DEFAULT_LIMIT = 50;
 
 function tableName(suffix: string): string {
@@ -245,6 +247,7 @@ class TableAdminUserRepository implements AdminUserRepository {
         partitionKey: ADMINS_PARTITION,
         rowKey: user.username,
         displayName: user.displayName,
+        role: user.role,
         passwordHash: user.passwordHash,
         createdAt: user.createdAt,
         createdBy: user.createdBy,
@@ -268,6 +271,8 @@ function entityToAdminUser(entity: any): StoredAdminUser {
   return {
     username: entity.rowKey,
     displayName: entity.displayName || entity.rowKey,
+    // Rows written before roles existed carry no role; those accounts are 관리자.
+    role: entity.role === 'STAFF' ? 'STAFF' : 'ADMIN',
     passwordHash: entity.passwordHash || '',
     createdAt: entity.createdAt,
     createdBy: entity.createdBy || '',
@@ -440,12 +445,43 @@ class TableIssueRepository implements IssueRepository {
   }
 }
 
+/* ------------------------------------------------------------------ */
+/* Settings                                                            */
+/* ------------------------------------------------------------------ */
+
+class TableSettingsRepository implements SettingsRepository {
+  constructor(private readonly client: TableClient) {}
+
+  async get(key: string): Promise<string | null> {
+    try {
+      const entity: any = await this.client.getEntity(SETTINGS_PARTITION, key);
+      return typeof entity.value === 'string' ? entity.value : null;
+    } catch (err: any) {
+      if (err?.statusCode === 404) return null;
+      throw err;
+    }
+  }
+
+  async set(key: string, value: string): Promise<void> {
+    await this.client.upsertEntity(
+      {
+        partitionKey: SETTINGS_PARTITION,
+        rowKey: key,
+        value,
+        updatedAt: new Date().toISOString(),
+      },
+      'Replace'
+    );
+  }
+}
+
 export async function createTableRepositories(): Promise<Repositories> {
   const names = {
     sites: tableName('Sites'),
     logs: tableName('UploadLogs'),
     issues: tableName('Issues'),
     admins: tableName('Admins'),
+    settings: tableName('Settings'),
   };
 
   await ensureTables(Object.values(names));
@@ -455,6 +491,7 @@ export async function createTableRepositories(): Promise<Repositories> {
     logs: new TableUploadLogRepository(createClient(names.logs)),
     issues: new TableIssueRepository(createClient(names.issues)),
     admins: new TableAdminUserRepository(createClient(names.admins)),
+    settings: new TableSettingsRepository(createClient(names.settings)),
     backend: 'AZURE_TABLES',
   };
 }

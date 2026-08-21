@@ -258,35 +258,14 @@ export const ExternalSubmissionForm: React.FC<ExternalSubmissionFormProps> = ({
 
   return (
     <div className="max-w-3xl mx-auto py-6 sm:py-10 px-4 sm:px-6">
-      {/* Top Banner & Instructions */}
-      <div className="bg-gradient-to-r from-blue-700 to-indigo-800 text-white rounded-xl p-6 sm:p-8 mb-8 shadow-md">
-        <div className="flex items-start gap-4">
-          <div className="p-3 bg-white/15 rounded-lg backdrop-blur-xs">
-            <Sparkles className="w-6 h-6 text-blue-200" />
+      {/* Top Banner — title only. Upload limits are stated at the dropzone,
+          where they actually matter, so they are not repeated here. */}
+      <div className="bg-gradient-to-r from-blue-700 to-indigo-800 text-white rounded-xl px-5 py-4 sm:px-6 sm:py-5 mb-8 shadow-md">
+        <div className="flex items-center gap-3">
+          <div className="p-2.5 bg-white/15 rounded-lg backdrop-blur-xs shrink-0">
+            <Sparkles className="w-5 h-5 text-blue-200" />
           </div>
-          <div>
-            <h2 className="text-xl sm:text-2xl font-bold mb-2">
-              시공현장 자료 제출
-            </h2>
-            <p className="text-sm sm:text-base text-blue-100 leading-relaxed">
-              별도의 회원가입이나 로그인 없이 즉시 현장 정보와 시공 사진·동영상을
-              제출하실 수 있습니다. 제출된 자료는 현장별 전용 폴더에 안전하게 보관됩니다.
-            </p>
-            <div className="mt-4 flex flex-wrap gap-2 text-xs">
-              <span className="inline-flex items-center gap-1 bg-white/10 px-2.5 py-1 rounded-md">
-                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-300" />
-                로그인 불필요
-              </span>
-              <span className="inline-flex items-center gap-1 bg-white/10 px-2.5 py-1 rounded-md">
-                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-300" />
-                사진·동영상 최대 50개
-              </span>
-              <span className="inline-flex items-center gap-1 bg-white/10 px-2.5 py-1 rounded-md">
-                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-300" />
-                파일당 최대 100MB
-              </span>
-            </div>
-          </div>
+          <h2 className="text-xl sm:text-2xl font-bold">시공현장 자료 제출</h2>
         </div>
       </div>
 

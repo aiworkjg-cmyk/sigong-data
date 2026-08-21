@@ -18,6 +18,9 @@ function int(value: string | undefined, fallback: number): number {
 
 const isProduction = process.env.NODE_ENV === 'production';
 
+/** Used when neither the store nor CONSTRUCTION_TYPES supplies a list. */
+const DEFAULT_CONSTRUCTION_TYPES = ['백조', '인덕션', '한샘', '이펙스', '워너홈'];
+
 /**
  * Writable root for staged uploads, the test-mode library mirror, and the JSON
  * fallback store. On App Service only /home survives a restart, so DATA_DIR is
@@ -45,11 +48,11 @@ export const config = {
   },
 
   /**
-   * Selectable product lines. The submission form renders exactly this list and
-   * the server rejects anything outside it, so the value is always safe to use
-   * as a folder name.
+   * Seed for the selectable product lines, used only the first time the app
+   * runs against an empty store. From then on the live list is whatever the
+   * 설정 화면 last saved — see server/settings.ts.
    */
-  constructionTypes: (process.env.CONSTRUCTION_TYPES || '백조,인덕션,한샘,이펙스,워너홈')
+  initialConstructionTypes: (process.env.CONSTRUCTION_TYPES || DEFAULT_CONSTRUCTION_TYPES.join(','))
     .split(',')
     .map((value) => value.trim())
     .filter(Boolean),
@@ -147,8 +150,10 @@ export function validateConfig(): { errors: string[]; warnings: string[] } {
     );
   }
 
-  if (config.constructionTypes.length === 0) {
-    errors.push('CONSTRUCTION_TYPES 가 비어 있습니다. 시공종류를 1개 이상 지정해야 합니다.');
+  if (config.initialConstructionTypes.length === 0) {
+    warnings.push(
+      'CONSTRUCTION_TYPES 가 비어 있습니다. 첫 실행이라면 관리자 화면의 설정에서 시공종류를 추가해야 제출이 가능합니다.'
+    );
   }
 
   if (config.mail.alertRecipients.length === 0) {

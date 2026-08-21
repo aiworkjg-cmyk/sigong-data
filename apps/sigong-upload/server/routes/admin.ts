@@ -1,11 +1,13 @@
 import { Router } from 'express';
 import type { Response } from 'express';
 import { AdminError } from '../admin-directory';
-import { requireMaster } from '../auth';
+import { requireEditor, requireMaster } from '../auth';
 import { config } from '../config';
 import { mailer } from '../mailer';
+import { SettingsError } from '../settings';
 import type { AppContext } from '../context';
-import type { Issue, IssuePriority, IssueStatus } from '../../src/types';
+import { ASSIGNABLE_ROLES } from '../../src/types';
+import type { AssignableRole, Issue, IssuePriority, IssueStatus } from '../../src/types';
 import { cleanText, clientIp, generateId } from '../util';
 
 const ISSUE_STATUSES: IssueStatus[] = ['OPEN', 'IN_PROGRESS', 'RESOLVED'];
@@ -18,6 +20,13 @@ function parseLimit(value: unknown, fallback = 50): number {
 
 function cursorOf(value: unknown): string | undefined {
   return typeof value === 'string' && value ? value : undefined;
+}
+
+/** Returns the requested role, or undefined when the field was not sent. */
+function readRole(value: unknown): AssignableRole | undefined {
+  return ASSIGNABLE_ROLES.includes(value as AssignableRole)
+    ? (value as AssignableRole)
+    : undefined;
 }
 
 export function createAdminRouter(ctx: AppContext): Router {
@@ -36,7 +45,7 @@ export function createAdminRouter(ctx: AppContext): Router {
       sharePoint,
       connectivity,
       recordBackend: ctx.repos.backend,
-      constructionTypes: config.constructionTypes,
+      constructionTypes: ctx.settings.constructionTypes(),
       mail: {
         configured: mailer.isConfigured(),
         sender: config.mail.sender,
@@ -87,7 +96,7 @@ export function createAdminRouter(ctx: AppContext): Router {
    * Queues another filing attempt. Returns straight away — progress shows up in
    * the record's status, the same path an automatic retry takes.
    */
-  router.post('/sites/:id/retry', async (req, res) => {
+  router.post('/sites/:id/retry', requireEditor, async (req, res) => {
     const site = await ctx.repos.sites.get(req.params.id);
     if (!site) {
       res.status(404).json({ error: '현장을 찾을 수 없습니다.' });
@@ -193,7 +202,7 @@ export function createAdminRouter(ctx: AppContext): Router {
     }
   });
 
-  router.post('/issues', async (req, res) => {
+  router.post('/issues', requireEditor, async (req, res) => {
     const title = cleanText(req.body?.title, 200);
     if (!title) {
       res.status(400).json({ error: '입력 오류', message: '이슈 제목을 입력해 주세요.' });
@@ -219,7 +228,7 @@ export function createAdminRouter(ctx: AppContext): Router {
     res.status(201).json({ issue });
   });
 
-  router.patch('/issues/:id', async (req, res) => {
+  router.patch('/issues/:id', requireEditor, async (req, res) => {
     const issue = await ctx.repos.issues.get(req.params.id);
     if (!issue) {
       res.status(404).json({ error: '이슈를 찾을 수 없습니다.' });
@@ -237,7 +246,7 @@ export function createAdminRouter(ctx: AppContext): Router {
     res.json({ issue });
   });
 
-  router.post('/issues/:id/comments', async (req, res) => {
+  router.post('/issues/:id/comments', requireEditor, async (req, res) => {
     const issue = await ctx.repos.issues.get(req.params.id);
     if (!issue) {
       res.status(404).json({ error: '이슈를 찾을 수 없습니다.' });
@@ -262,9 +271,50 @@ export function createAdminRouter(ctx: AppContext): Router {
     res.status(201).json({ issue });
   });
 
-  router.delete('/issues/:id', async (req, res) => {
+  router.delete('/issues/:id', requireEditor, async (req, res) => {
     await ctx.repos.issues.remove(req.params.id);
     res.json({ success: true });
+  });
+
+  /* ---------------------------------------------------------------- */
+  /* Settings — 시공종류                                                */
+  /* ---------------------------------------------------------------- */
+
+  const handleSettingsError = (err: unknown, res: Response) => {
+    if (err instanceof SettingsError) {
+      res.status(err.status).json({ error: '설정 오류', message: err.message });
+      return;
+    }
+    console.error('[admin] 설정 변경 실패', err);
+    res.status(500).json({ error: '설정 변경 실패', message: '요청을 처리하지 못했습니다.' });
+  };
+
+  router.get('/settings/construction-types', (_req, res) => {
+    res.json({ constructionTypes: ctx.settings.constructionTypes() });
+  });
+
+  router.post('/settings/construction-types', requireEditor, async (req, res) => {
+    try {
+      const constructionTypes = await ctx.settings.addConstructionType(
+        cleanText(req.body?.name, 40)
+      );
+      res.status(201).json({ constructionTypes });
+    } catch (err) {
+      handleSettingsError(err, res);
+    }
+  });
+
+  /**
+   * Removes a type from the selectable list. Submissions already filed under it
+   * keep their folder — this only stops the value being offered from now on.
+   */
+  router.delete('/settings/construction-types/:name', requireEditor, async (req, res) => {
+    try {
+      const constructionTypes = await ctx.settings.removeConstructionType(req.params.name);
+      res.json({ constructionTypes });
+    } catch (err) {
+      handleSettingsError(err, res);
+    }
   });
 
   /* ---------------------------------------------------------------- */
@@ -295,6 +345,8 @@ export function createAdminRouter(ctx: AppContext): Router {
         username: cleanText(req.body?.username, 32),
         displayName: cleanText(req.body?.displayName, 40),
         password: String(req.body?.password || ''),
+        // Default to 관리자 so an older client that posts no role keeps working.
+        role: readRole(req.body?.role) ?? 'ADMIN',
         createdBy: req.admin?.username || 'master',
       });
       res.status(201).json({ account });
@@ -309,6 +361,11 @@ export function createAdminRouter(ctx: AppContext): Router {
 
       if (typeof req.body?.disabled === 'boolean') {
         await ctx.directory.setDisabled(username, req.body.disabled);
+      }
+
+      const role = readRole(req.body?.role);
+      if (role) {
+        await ctx.directory.setRole(username, role);
       }
       if (typeof req.body?.password === 'string' && req.body.password) {
         await ctx.directory.resetPassword(username, req.body.password);

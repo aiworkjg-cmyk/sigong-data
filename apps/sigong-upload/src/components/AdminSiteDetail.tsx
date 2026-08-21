@@ -30,6 +30,8 @@ interface AdminSiteDetailProps {
   onSelectFileForPreview: (file: SiteFile) => void;
   onOpenSharePointInspector: () => void;
   onRetrySync: (siteId: string) => Promise<void>;
+  /** False for 일반 권한 accounts, which may look but not act. */
+  canEdit: boolean;
 }
 
 export const AdminSiteDetail: React.FC<AdminSiteDetailProps> = ({
@@ -38,6 +40,7 @@ export const AdminSiteDetail: React.FC<AdminSiteDetailProps> = ({
   onSelectFileForPreview,
   onOpenSharePointInspector,
   onRetrySync,
+  canEdit,
 }) => {
   const [mediaFilter, setMediaFilter] = useState<'all' | 'image' | 'video'>('all');
   const [copiedId, setCopiedId] = useState(false);
@@ -97,15 +100,17 @@ export const AdminSiteDetail: React.FC<AdminSiteDetailProps> = ({
             <span>SharePoint 폴더 구조 확인</span>
           </button>
 
-          <button
-            type="button"
-            onClick={handleRetry}
-            disabled={isRetrying}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold transition-colors shadow-2xs"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${isRetrying ? 'animate-spin text-blue-600' : ''}`} />
-            <span>저장 재시도</span>
-          </button>
+          {canEdit && (
+            <button
+              type="button"
+              onClick={handleRetry}
+              disabled={isRetrying}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold transition-colors shadow-2xs"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isRetrying ? 'animate-spin text-blue-600' : ''}`} />
+              <span>저장 재시도</span>
+            </button>
+          )}
         </div>
       </div>
 

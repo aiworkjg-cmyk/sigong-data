@@ -1,6 +1,7 @@
 import type {
   AdminSession,
   AdminUser,
+  AssignableRole,
   FolderEntry,
   Issue,
   IssuePriority,
@@ -147,17 +148,42 @@ export const adminApi = {
       method: 'DELETE',
     }),
 
+  /* Settings — readable by every admin, editable by 마스터/관리자. */
+
+  constructionTypes: () =>
+    request<{ constructionTypes: string[] }>('/api/admin/settings/construction-types'),
+
+  addConstructionType: (name: string) =>
+    request<{ constructionTypes: string[] }>('/api/admin/settings/construction-types', {
+      method: 'POST',
+      body: JSON.stringify({ name }),
+    }),
+
+  removeConstructionType: (name: string) =>
+    request<{ constructionTypes: string[] }>(
+      `/api/admin/settings/construction-types/${encodeURIComponent(name)}`,
+      { method: 'DELETE' }
+    ),
+
   /* Account management — master account only; others receive 403. */
 
   accounts: () => request<{ accounts: AdminUser[] }>('/api/admin/accounts'),
 
-  createAccount: (input: { username: string; displayName: string; password: string }) =>
+  createAccount: (input: {
+    username: string;
+    displayName: string;
+    password: string;
+    role: AssignableRole;
+  }) =>
     request<{ account: AdminUser }>('/api/admin/accounts', {
       method: 'POST',
       body: JSON.stringify(input),
     }),
 
-  updateAccount: (username: string, patch: { disabled?: boolean; password?: string }) =>
+  updateAccount: (
+    username: string,
+    patch: { disabled?: boolean; password?: string; role?: AssignableRole }
+  ) =>
     request<{ accounts: AdminUser[] }>(`/api/admin/accounts/${encodeURIComponent(username)}`, {
       method: 'PATCH',
       body: JSON.stringify(patch),

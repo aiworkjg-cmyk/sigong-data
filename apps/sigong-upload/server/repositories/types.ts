@@ -1,4 +1,4 @@
-import type { Issue, Paged, SiteRecord, UploadLog } from '../../src/types';
+import type { AssignableRole, Issue, Paged, SiteRecord, UploadLog } from '../../src/types';
 
 export interface ListOptions {
   limit?: number;
@@ -59,6 +59,8 @@ export interface IssueRepository {
 export interface StoredAdminUser {
   username: string;
   displayName: string;
+  /** 관리자(ADMIN) or 일반(STAFF). Rows written before roles existed read as ADMIN. */
+  role: AssignableRole;
   passwordHash: string;
   createdAt: string;
   createdBy: string;
@@ -73,6 +75,16 @@ export interface AdminUserRepository {
   remove(username: string): Promise<void>;
 }
 
+/**
+ * Small key/value store for settings an admin can change at runtime, such as
+ * the 시공종류 list. Values are opaque strings; the caller decides the encoding
+ * (the 시공종류 list is stored as a JSON array).
+ */
+export interface SettingsRepository {
+  get(key: string): Promise<string | null>;
+  set(key: string, value: string): Promise<void>;
+}
+
 /** Submissions still awaiting (or retrying) their upload to the library. */
 export interface PendingSubmission {
   siteId: string;
@@ -85,6 +97,7 @@ export interface Repositories {
   logs: UploadLogRepository;
   issues: IssueRepository;
   admins: AdminUserRepository;
+  settings: SettingsRepository;
   /** Which backend is actually in use, surfaced in the admin diagnostics. */
   backend: 'AZURE_TABLES' | 'LOCAL_JSON';
 }

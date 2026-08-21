@@ -87,10 +87,11 @@ SHAREPOINT_DRIVE_ID=""
 
 ## 7. 연동 확인
 
-서버를 재시작한 뒤 아래 주소로 접속해 `mode`가 `"LIVE"`로 바뀌었는지 확인합니다.
+서버를 재시작한 뒤 아래 주소를 브라우저에 그대로 붙여넣어 `mode`가 `"LIVE"`로 바뀌었는지
+확인합니다. (`"TEST_MODE"` 로 나오면 아직 연동 전입니다.)
 
 ```
-GET http://localhost:3000/api/status
+http://localhost:3000/api/config
 ```
 
 관리자로 로그인한 뒤 우측 상단 **저장소 상태** 버튼을 누르면 연결 여부, 현재 폴더 분류 규칙,

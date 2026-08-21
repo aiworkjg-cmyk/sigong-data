@@ -75,7 +75,7 @@ export function createPublicRouter(ctx: AppContext): Router {
   router.get('/config', (_req, res) => {
     res.json({
       mode: ctx.sharePoint.getConfigStatus().mode,
-      constructionTypes: config.constructionTypes,
+      constructionTypes: ctx.settings.constructionTypes(),
       maxFiles: config.uploads.maxFiles,
       maxFileSizeMb: Math.floor(config.uploads.maxFileSizeBytes / (1024 * 1024)),
     });
@@ -150,8 +150,9 @@ export function createPublicRouter(ctx: AppContext): Router {
         res.status(400).json({ error: '필수 입력 누락', message });
       };
 
-      // Never trust the posted value — it becomes a folder name.
-      if (!config.constructionTypes.includes(constructionType)) {
+      // Never trust the posted value — it becomes a folder name. Checked against
+      // the live list so a type removed in 설정 stops being accepted at once.
+      if (!ctx.settings.constructionTypes().includes(constructionType)) {
         return reject('시공종류를 선택해 주세요.');
       }
       if (!managerName) return reject('담당자 이름을 입력해 주세요.');

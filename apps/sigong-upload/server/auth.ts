@@ -1,10 +1,12 @@
 import crypto from 'crypto';
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 import { config } from './config';
+import { canEdit } from '../src/types';
 import type { AdminRole, AdminSession } from '../src/types';
 
 const COOKIE_NAME = 'sigong_admin';
 const SCRYPT_KEYLEN = 64;
+const ROLES: AdminRole[] = ['MASTER', 'ADMIN', 'STAFF'];
 
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
@@ -74,7 +76,7 @@ function readToken(token: string): SessionPayload | null {
   try {
     const payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf-8')) as SessionPayload;
     if (typeof payload.exp !== 'number' || Date.now() >= payload.exp) return null;
-    if (!payload.u || (payload.r !== 'MASTER' && payload.r !== 'ADMIN')) return null;
+    if (!payload.u || !ROLES.includes(payload.r)) return null;
     return payload;
   } catch {
     return null;
@@ -203,6 +205,21 @@ export function requireMaster(req: Request, res: Response, next: NextFunction): 
     res.status(403).json({
       error: '권한 없음',
       message: '계정 관리는 마스터 관리자만 사용할 수 있습니다.',
+    });
+    return;
+  }
+  next();
+}
+
+/**
+ * Blocks 일반(STAFF) accounts from anything that writes. They keep full read
+ * access; the UI hides these controls, and this is the check that enforces it.
+ */
+export function requireEditor(req: Request, res: Response, next: NextFunction): void {
+  if (!canEdit(req.admin?.role)) {
+    res.status(403).json({
+      error: '권한 없음',
+      message: '일반 권한 계정은 조회만 가능합니다. 관리자에게 문의해 주세요.',
     });
     return;
   }

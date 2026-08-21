@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { ApiError, adminApi, publicApi } from './api';
+import { canEdit } from './types';
 import type { AdminSession, PublicConfig, SiteFile, SiteRecord, UploadProgressItem } from './types';
 import { Header, type AppView } from './components/Header';
 import { ExternalSubmissionForm } from './components/ExternalSubmissionForm';
@@ -11,6 +12,7 @@ import { AdminSiteDetail } from './components/AdminSiteDetail';
 import { AdminUploadLogs } from './components/AdminUploadLogs';
 import { AdminIssues } from './components/AdminIssues';
 import { AdminAccounts } from './components/AdminAccounts';
+import { AdminSettings } from './components/AdminSettings';
 import { MediaViewerModal } from './components/MediaViewerModal';
 import { AdminDiagnosticsModal } from './components/AdminDiagnosticsModal';
 
@@ -304,6 +306,7 @@ export default function App() {
             onSelectFileForPreview={setPreviewFile}
             onOpenSharePointInspector={() => setIsDiagnosticsOpen(true)}
             onRetrySync={handleRetrySync}
+            canEdit={canEdit(session.role)}
           />
         )}
 
@@ -315,6 +318,17 @@ export default function App() {
           <AdminIssues
             defaultSiteId={selectedSiteId ?? undefined}
             onOpenSite={(siteId) => void openSite(siteId)}
+            canEdit={canEdit(session.role)}
+          />
+        )}
+
+        {currentView === 'admin-settings' && session && (
+          <AdminSettings
+            role={session.role}
+            onConstructionTypesChanged={(constructionTypes) =>
+              // Keeps the submission form in step without a page reload.
+              setPublicConfig((prev) => (prev ? { ...prev, constructionTypes } : prev))
+            }
           />
         )}
 

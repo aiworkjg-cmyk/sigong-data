@@ -3,6 +3,7 @@ import { AdminDirectory } from './admin-directory';
 import { config, ensureDataDirs, validateConfig } from './config';
 import { mailer } from './mailer';
 import { createRepositories, type Repositories } from './repositories';
+import { SettingsService } from './settings';
 import { SubmissionIntake } from './submission';
 import { SubmissionWorker } from './worker';
 
@@ -12,6 +13,8 @@ export interface AppContext {
   intake: SubmissionIntake;
   worker: SubmissionWorker;
   directory: AdminDirectory;
+  /** Admin-editable settings (시공종류 목록). */
+  settings: SettingsService;
   /** Non-fatal configuration problems, shown in the admin diagnostics panel. */
   warnings: string[];
 }
@@ -34,6 +37,14 @@ export async function createContext(): Promise<AppContext> {
   const repos = await createRepositories();
   const worker = new SubmissionWorker(repos, sharePoint);
 
+  // Loaded before the server accepts traffic: the submission endpoint checks
+  // every upload against this list.
+  const settings = new SettingsService(repos.settings);
+  await settings.load();
+  if (settings.constructionTypes().length === 0) {
+    warnings.push('시공종류가 하나도 없습니다. 관리자 화면 > 설정에서 추가해야 자료 제출이 가능합니다.');
+  }
+
   if (!mailer.isConfigured()) {
     warnings.push(
       '실패 알림 메일이 비활성 상태입니다. (MAIL_SENDER / ADMIN_ALERT_EMAIL / SHAREPOINT_* 설정 필요)'
@@ -53,6 +64,7 @@ export async function createContext(): Promise<AppContext> {
     intake: new SubmissionIntake(repos, sharePoint),
     worker,
     directory: new AdminDirectory(repos.admins),
+    settings,
     warnings,
   };
 }

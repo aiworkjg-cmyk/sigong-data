@@ -12,7 +12,8 @@ import {
   XCircle,
 } from 'lucide-react';
 import { adminApi } from '../api';
-import type { AdminUser } from '../types';
+import { ASSIGNABLE_ROLES, ROLE_DESCRIPTIONS, ROLE_LABELS } from '../types';
+import type { AdminUser, AssignableRole } from '../types';
 
 const MIN_PASSWORD_LENGTH = 10;
 
@@ -35,7 +36,12 @@ export const AdminAccounts: React.FC<AdminAccountsProps> = ({ currentUsername })
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [isComposing, setIsComposing] = useState(false);
-  const [draft, setDraft] = useState({ username: '', displayName: '', password: '' });
+  const [draft, setDraft] = useState<{
+    username: string;
+    displayName: string;
+    password: string;
+    role: AssignableRole;
+  }>({ username: '', displayName: '', password: '', role: 'ADMIN' });
 
   const load = useCallback(async () => {
     setIsLoading(true);
@@ -65,7 +71,7 @@ export const AdminAccounts: React.FC<AdminAccountsProps> = ({ currentUsername })
     setError(null);
     try {
       await adminApi.createAccount(draft);
-      setDraft({ username: '', displayName: '', password: '' });
+      setDraft({ username: '', displayName: '', password: '', role: 'ADMIN' });
       setIsComposing(false);
       setNotice('계정이 추가되었습니다.');
       await load();
@@ -87,6 +93,20 @@ export const AdminAccounts: React.FC<AdminAccountsProps> = ({ currentUsername })
       setNotice(`${account.username} 계정을 ${account.disabled ? '사용' : '중지'} 처리했습니다.`);
     } catch (err: any) {
       setError(err?.message || '상태 변경에 실패했습니다.');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const handleRoleChange = async (account: AdminUser, role: AssignableRole) => {
+    setBusy(account.username);
+    setError(null);
+    try {
+      const { accounts: list } = await adminApi.updateAccount(account.username, { role });
+      setAccounts(list);
+      setNotice(`${account.username} 계정의 권한을 ${ROLE_LABELS[role]}(으)로 변경했습니다.`);
+    } catch (err: any) {
+      setError(err?.message || '권한 변경에 실패했습니다.');
     } finally {
       setBusy(null);
     }
@@ -135,7 +155,9 @@ export const AdminAccounts: React.FC<AdminAccountsProps> = ({ currentUsername })
             관리자 계정
           </h2>
           <p className="text-xs text-slate-500 mt-1">
-            추가 관리자는 현장 자료·로그·이슈를 모두 볼 수 있지만, 계정 관리는 마스터만 가능합니다.
+            <span className="font-semibold text-slate-700">관리자</span>는 자료·이슈·설정을 변경할 수
+            있고, <span className="font-semibold text-slate-700">일반</span>은 조회만 가능합니다.
+            계정 관리는 마스터만 할 수 있습니다.
           </p>
         </div>
 
@@ -208,6 +230,36 @@ export const AdminAccounts: React.FC<AdminAccountsProps> = ({ currentUsername })
             </div>
           </div>
           <div>
+            <label className="block text-xs font-bold text-slate-700 mb-1.5">권한</label>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {ASSIGNABLE_ROLES.map((role) => {
+                const selected = draft.role === role;
+                return (
+                  <button
+                    key={role}
+                    type="button"
+                    onClick={() => setDraft({ ...draft, role })}
+                    className={`text-left px-3 py-2.5 rounded-lg border-2 transition-colors ${
+                      selected
+                        ? 'border-blue-600 bg-blue-50'
+                        : 'border-slate-200 bg-white hover:border-slate-300'
+                    }`}
+                  >
+                    <span
+                      className={`block text-sm font-bold ${selected ? 'text-blue-800' : 'text-slate-800'}`}
+                    >
+                      {ROLE_LABELS[role]}
+                    </span>
+                    <span className="block text-[11px] text-slate-500 mt-0.5">
+                      {ROLE_DESCRIPTIONS[role]}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div>
             <label className="block text-xs font-bold text-slate-700 mb-1.5">
               비밀번호 ({MIN_PASSWORD_LENGTH}자 이상)
             </label>
@@ -256,10 +308,20 @@ export const AdminAccounts: React.FC<AdminAccountsProps> = ({ currentUsername })
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className="text-sm font-bold text-slate-900">{account.displayName}</span>
                     <span className="text-xs font-mono text-slate-500">({account.username})</span>
-                    {isMaster && (
+                    {isMaster ? (
                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-purple-100 text-purple-800 border border-purple-200">
                         <Crown className="w-3 h-3" />
-                        마스터
+                        {ROLE_LABELS.MASTER}
+                      </span>
+                    ) : (
+                      <span
+                        className={`px-2 py-0.5 rounded-full text-[11px] font-bold border ${
+                          account.role === 'ADMIN'
+                            ? 'bg-blue-50 text-blue-800 border-blue-200'
+                            : 'bg-slate-100 text-slate-700 border-slate-300'
+                        }`}
+                      >
+                        {ROLE_LABELS[account.role]}
                       </span>
                     )}
                     {isSelf && (
@@ -284,6 +346,21 @@ export const AdminAccounts: React.FC<AdminAccountsProps> = ({ currentUsername })
 
                 {!isMaster && (
                   <div className="flex items-center gap-1.5 shrink-0">
+                    <select
+                      value={account.role === 'STAFF' ? 'STAFF' : 'ADMIN'}
+                      onChange={(event) =>
+                        void handleRoleChange(account, event.target.value as AssignableRole)
+                      }
+                      disabled={isBusy}
+                      title="권한 변경"
+                      className="px-2 py-1.5 rounded-lg border border-slate-300 bg-white text-[11px] font-semibold text-slate-700 disabled:opacity-60"
+                    >
+                      {ASSIGNABLE_ROLES.map((role) => (
+                        <option key={role} value={role}>
+                          {ROLE_LABELS[role]}
+                        </option>
+                      ))}
+                    </select>
                     <button
                       type="button"
                       onClick={() => void handleResetPassword(account)}

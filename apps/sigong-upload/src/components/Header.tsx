@@ -6,6 +6,7 @@ import {
   HardHat,
   LogOut,
   ScrollText,
+  Settings,
   ShieldCheck,
 } from 'lucide-react';
 import type { AdminSession, PublicConfig } from '../types';
@@ -18,6 +19,7 @@ export type AppView =
   | 'admin-detail'
   | 'admin-logs'
   | 'admin-issues'
+  | 'admin-settings'
   | 'admin-accounts';
 
 interface HeaderProps {
@@ -41,6 +43,7 @@ const ADMIN_TABS: AdminTab[] = [
   { view: 'admin-sites', label: '현장 목록', Icon: HardHat },
   { view: 'admin-logs', label: '업로드 로그', Icon: ScrollText },
   { view: 'admin-issues', label: '이슈 관리', Icon: AlertTriangle },
+  { view: 'admin-settings', label: '설정', Icon: Settings },
   { view: 'admin-accounts', label: '계정 관리', Icon: ShieldCheck, masterOnly: true },
 ];
 
@@ -63,26 +66,19 @@ export const Header: React.FC<HeaderProps> = ({
             <div className="w-10 h-10 rounded-lg bg-blue-600 flex items-center justify-center text-white shadow-xs shrink-0">
               <Building2 className="w-6 h-6" />
             </div>
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <h1 className="text-base sm:text-lg font-bold text-slate-900 leading-tight truncate">
-                  시공현장 자료 수집·관리 시스템
-                </h1>
-                <span
-                  className={`hidden sm:inline text-xs px-2 py-0.5 rounded-full font-medium shrink-0 ${
-                    isAdminView
-                      ? 'bg-purple-100 text-purple-700 border border-purple-200'
-                      : 'bg-emerald-100 text-emerald-700 border border-emerald-200'
-                  }`}
-                >
-                  {isAdminView ? '관리자 모드' : '현장 공유 링크'}
-                </span>
-              </div>
-              <p className="text-xs text-slate-500 hidden md:block truncate">
-                {isAdminView
-                  ? `${session?.displayName ?? '관리자'}${session?.role === 'MASTER' ? ' (마스터)' : ''} — 제출 자료 확인 및 저장소 관리`
-                  : '외부 작업자용 로그인 없는 현장자료 즉시 제출 페이지'}
-              </p>
+            <div className="min-w-0 flex items-center gap-2">
+              <h1 className="text-base sm:text-lg font-bold text-slate-900 leading-tight truncate">
+                시공현장 자료 관리
+              </h1>
+              <span
+                className={`hidden sm:inline text-xs px-2 py-0.5 rounded-full font-medium shrink-0 ${
+                  isAdminView
+                    ? 'bg-purple-100 text-purple-700 border border-purple-200'
+                    : 'bg-emerald-100 text-emerald-700 border border-emerald-200'
+                }`}
+              >
+                {isAdminView ? '관리자 모드' : '현장 공유 링크'}
+              </span>
             </div>
           </div>
 

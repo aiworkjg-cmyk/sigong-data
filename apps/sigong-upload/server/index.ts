@@ -66,7 +66,7 @@ async function startServer(): Promise<void> {
     console.log(`  저장 모드   : ${status.mode}`);
     console.log(`  기록 저장소 : ${ctx.repos.backend}`);
     console.log(`  분류 경로 예: ${status.examplePath}`);
-    console.log(`  시공종류    : ${config.constructionTypes.join(', ')}`);
+    console.log(`  시공종류    : ${ctx.settings.constructionTypes().join(', ') || '(없음)'}`);
   });
 
   // Long uploads must not be cut off by the default 2-minute header timeout.

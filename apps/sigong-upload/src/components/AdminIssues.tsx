@@ -42,9 +42,15 @@ interface AdminIssuesProps {
   /** Pre-fills the site field when an issue is raised from a submission. */
   defaultSiteId?: string;
   onOpenSite: (siteId: string) => void;
+  /** False for 일반 권한 accounts: the thread stays readable, but read-only. */
+  canEdit: boolean;
 }
 
-export const AdminIssues: React.FC<AdminIssuesProps> = ({ defaultSiteId, onOpenSite }) => {
+export const AdminIssues: React.FC<AdminIssuesProps> = ({
+  defaultSiteId,
+  onOpenSite,
+  canEdit,
+}) => {
   const [issues, setIssues] = useState<Issue[]>([]);
   const [statusFilter, setStatusFilter] = useState<IssueStatus | ''>('');
   const [isLoading, setIsLoading] = useState(false);
@@ -166,14 +172,16 @@ export const AdminIssues: React.FC<AdminIssuesProps> = ({ defaultSiteId, onOpenS
             <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin text-blue-600' : ''}`} />
             <span>새로고침</span>
           </button>
-          <button
-            type="button"
-            onClick={() => setIsComposing((prev) => !prev)}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold"
-          >
-            {isComposing ? <X className="w-3.5 h-3.5" /> : <Plus className="w-3.5 h-3.5" />}
-            <span>{isComposing ? '취소' : '새 이슈'}</span>
-          </button>
+          {canEdit && (
+            <button
+              type="button"
+              onClick={() => setIsComposing((prev) => !prev)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold"
+            >
+              {isComposing ? <X className="w-3.5 h-3.5" /> : <Plus className="w-3.5 h-3.5" />}
+              <span>{isComposing ? '취소' : '새 이슈'}</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -187,7 +195,7 @@ export const AdminIssues: React.FC<AdminIssuesProps> = ({ defaultSiteId, onOpenS
         </div>
       )}
 
-      {isComposing && (
+      {isComposing && canEdit && (
         <form
           onSubmit={handleCreate}
           className="bg-white rounded-2xl border border-slate-200 p-5 mb-5 space-y-3.5"
@@ -308,31 +316,33 @@ export const AdminIssues: React.FC<AdminIssuesProps> = ({ defaultSiteId, onOpenS
                     </p>
                   </div>
 
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    <select
-                      value={issue.status}
-                      disabled={isBusy}
-                      onChange={(event) =>
-                        void handleStatusChange(issue, event.target.value as IssueStatus)
-                      }
-                      className="px-2.5 py-1.5 rounded-lg border border-slate-300 text-[11px] font-semibold bg-white disabled:opacity-60"
-                    >
-                      {STATUS_ORDER.map((status) => (
-                        <option key={status} value={status}>
-                          {STATUS_META[status].label}
-                        </option>
-                      ))}
-                    </select>
-                    <button
-                      type="button"
-                      onClick={() => void handleDelete(issue)}
-                      disabled={isBusy}
-                      className="p-1.5 rounded-lg hover:bg-red-50 text-slate-400 hover:text-red-600 disabled:opacity-60"
-                      title="이슈 삭제"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
+                  {canEdit && (
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <select
+                        value={issue.status}
+                        disabled={isBusy}
+                        onChange={(event) =>
+                          void handleStatusChange(issue, event.target.value as IssueStatus)
+                        }
+                        className="px-2.5 py-1.5 rounded-lg border border-slate-300 text-[11px] font-semibold bg-white disabled:opacity-60"
+                      >
+                        {STATUS_ORDER.map((status) => (
+                          <option key={status} value={status}>
+                            {STATUS_META[status].label}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        onClick={() => void handleDelete(issue)}
+                        disabled={isBusy}
+                        className="p-1.5 rounded-lg hover:bg-red-50 text-slate-400 hover:text-red-600 disabled:opacity-60"
+                        title="이슈 삭제"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  )}
                 </div>
 
                 {/* Comment thread */}
@@ -352,6 +362,7 @@ export const AdminIssues: React.FC<AdminIssuesProps> = ({ defaultSiteId, onOpenS
                     </ul>
                   )}
 
+                  {canEdit && (
                   <div className="flex items-center gap-2">
                     <input
                       type="text"
@@ -382,6 +393,7 @@ export const AdminIssues: React.FC<AdminIssuesProps> = ({ defaultSiteId, onOpenS
                       )}
                     </button>
                   </div>
+                  )}
                 </div>
               </div>
             );
