@@ -1,12 +1,16 @@
 import React, { useCallback, useEffect, useState } from 'react';
+import { X } from 'lucide-react';
 import { ApiError, adminApi, publicApi } from './api';
-import { canEdit } from './types';
+import { isMaster } from './types';
 import type { AdminSession, PublicConfig, SiteFile, SiteRecord, UploadProgressItem } from './types';
-import { Header, type AppView } from './components/Header';
+import { Header } from './components/Header';
+import { Sidebar, type AppView } from './components/Sidebar';
 import { ExternalSubmissionForm } from './components/ExternalSubmissionForm';
 import { UploadProgressModal } from './components/UploadProgressModal';
 import { SubmissionSuccessView } from './components/SubmissionSuccessView';
 import { AdminLogin } from './components/AdminLogin';
+import { SiteHistory } from './components/SiteHistory';
+import { TechnicianManager } from './components/TechnicianManager';
 import { AdminSiteList } from './components/AdminSiteList';
 import { AdminSiteDetail } from './components/AdminSiteDetail';
 import { AdminUploadLogs } from './components/AdminUploadLogs';
@@ -15,6 +19,15 @@ import { AdminAccounts } from './components/AdminAccounts';
 import { AdminSettings } from './components/AdminSettings';
 import { MediaViewerModal } from './components/MediaViewerModal';
 import { AdminDiagnosticsModal } from './components/AdminDiagnosticsModal';
+
+/** Views only the master may open. Anyone else is bounced to 시공현황 리스트. */
+const MASTER_ONLY: AppView[] = [
+  'admin-sites',
+  'admin-logs',
+  'admin-issues',
+  'admin-settings',
+  'admin-accounts',
+];
 
 export default function App() {
   const [currentView, setCurrentView] = useState<AppView>('register');
@@ -36,7 +49,9 @@ export default function App() {
   const [currentStage, setCurrentStage] = useState('');
   const [uploadError, setUploadError] = useState<string | null>(null);
 
-  // Modals
+  // Shell
+  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+  const [isMobilePreview, setIsMobilePreview] = useState(false);
   const [previewFile, setPreviewFile] = useState<SiteFile | null>(null);
   const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState(false);
 
@@ -44,17 +59,25 @@ export default function App() {
   /* Bootstrap                                                         */
   /* ---------------------------------------------------------------- */
 
-  useEffect(() => {
-    publicApi.config().then(setPublicConfig).catch(() => setPublicConfig(null));
+  const loadPublicConfig = useCallback(() => {
+    publicApi
+      .config()
+      .then(setPublicConfig)
+      .catch(() => setPublicConfig(null));
+  }, []);
 
-    // Restore an existing admin session so a refresh does not force a re-login.
+  useEffect(() => {
+    loadPublicConfig();
+
+    // Restore an existing session so a refresh does not force a re-login.
     adminApi
       .session()
       .then(({ session: restored }) => setSession(restored))
       .catch(() => setSession(null))
       .finally(() => setIsCheckingSession(false));
-  }, []);
+  }, [loadPublicConfig]);
 
+  // Only the master console needs the full site list.
   const fetchSites = useCallback(async () => {
     setIsLoadingSites(true);
     try {
@@ -70,21 +93,33 @@ export default function App() {
     }
   }, []);
 
-  // Any admin view needs the site list; fetch it once the session is known.
   useEffect(() => {
-    if (session && currentView.startsWith('admin-') && currentView !== 'admin-login') {
+    if (isMaster(session?.role) && (currentView === 'admin-sites' || currentView === 'admin-logs')) {
       void fetchSites();
     }
   }, [session, currentView, fetchSites]);
+
+  // A session that loses its privileges must not be left staring at a blank
+  // master screen.
+  useEffect(() => {
+    if (MASTER_ONLY.includes(currentView) && !isMaster(session?.role)) {
+      setCurrentView(session ? 'history' : 'register');
+    }
+  }, [session, currentView]);
 
   /* ---------------------------------------------------------------- */
   /* Navigation                                                        */
   /* ---------------------------------------------------------------- */
 
   const navigate = (view: AppView) => {
-    // Admin destinations fall through to the login form until authenticated.
-    if (view.startsWith('admin-') && view !== 'admin-login' && !session) {
+    // Anything behind a login falls through to the login form.
+    const needsLogin = view !== 'register' && view !== 'completed' && view !== 'admin-login';
+    if (needsLogin && !session) {
       setCurrentView('admin-login');
+      return;
+    }
+    if (MASTER_ONLY.includes(view) && !isMaster(session?.role)) {
+      setCurrentView('history');
       return;
     }
     setCurrentView(view);
@@ -94,13 +129,12 @@ export default function App() {
     setSelectedSiteId(siteId);
     setCurrentView('admin-detail');
 
-    // The list may be paged or stale; make sure the record is loaded.
     if (!sites.some((site) => site.id === siteId)) {
       try {
         const { site } = await adminApi.site(siteId);
         setSites((prev) => [site, ...prev.filter((candidate) => candidate.id !== site.id)]);
       } catch {
-        setCurrentView('admin-sites');
+        setCurrentView(isMaster(session?.role) ? 'admin-sites' : 'history');
       }
     }
   };
@@ -110,6 +144,7 @@ export default function App() {
     setSession(null);
     setSites([]);
     setSelectedSiteId(null);
+    setIsMobilePreview(false);
     setCurrentView('register');
   };
 
@@ -119,7 +154,7 @@ export default function App() {
 
   const handleSiteSubmit = (formData: {
     constructionType: string;
-    managerName: string;
+    technicianIds: string[];
     address: string;
     constructionDate: string;
     notes: string;
@@ -142,7 +177,7 @@ export default function App() {
 
     const body = new FormData();
     body.append('constructionType', formData.constructionType);
-    body.append('managerName', formData.managerName);
+    formData.technicianIds.forEach((id) => body.append('technicianIds', id));
     body.append('address', formData.address);
     body.append('constructionDate', formData.constructionDate);
     body.append('notes', formData.notes);
@@ -204,7 +239,9 @@ export default function App() {
         const { site } = JSON.parse(xhr.responseText) as { site: SiteRecord };
         setOverallProgress(100);
         setCurrentStage('3단계: 제출이 접수되었습니다.');
-        setProgressItems((prev) => prev.map((item) => ({ ...item, progress: 100, status: 'completed' })));
+        setProgressItems((prev) =>
+          prev.map((item) => ({ ...item, progress: 100, status: 'completed' }))
+        );
 
         // Brief pause so the completed state is actually visible.
         setTimeout(() => {
@@ -241,101 +278,157 @@ export default function App() {
   };
 
   const selectedSite = sites.find((site) => site.id === selectedSiteId) ?? null;
+  const master = isMaster(session?.role);
 
   /* ---------------------------------------------------------------- */
   /* Render                                                            */
   /* ---------------------------------------------------------------- */
 
+  const content = (
+    <>
+      {currentView === 'register' && (
+        <ExternalSubmissionForm
+          onSubmit={handleSiteSubmit}
+          isSubmitting={isSubmitting}
+          constructionTypes={publicConfig?.constructionTypes ?? []}
+          technicians={publicConfig?.technicians ?? []}
+        />
+      )}
+
+      {currentView === 'completed' && submittedSite && (
+        <SubmissionSuccessView
+          site={submittedSite}
+          onNewSubmission={() => {
+            setSubmittedSite(null);
+            setCurrentView('register');
+          }}
+        />
+      )}
+
+      {currentView === 'admin-login' &&
+        (isCheckingSession ? (
+          <p className="py-24 text-center text-xs text-slate-400">확인 중...</p>
+        ) : (
+          <AdminLogin
+            onAuthenticated={(authenticated) => {
+              setSession(authenticated);
+              setCurrentView(isMaster(authenticated.role) ? 'admin-sites' : 'history');
+            }}
+            onCancel={() => setCurrentView('register')}
+          />
+        ))}
+
+      {currentView === 'history' && session && (
+        <SiteHistory session={session} onOpenSite={(siteId) => void openSite(siteId)} />
+      )}
+
+      {currentView === 'technicians' && session && <TechnicianManager session={session} />}
+
+      {currentView === 'admin-detail' && session && selectedSite && (
+        <AdminSiteDetail
+          site={selectedSite}
+          onBack={() => setCurrentView(master ? 'admin-sites' : 'history')}
+          onSelectFileForPreview={setPreviewFile}
+          onOpenSharePointInspector={() => setIsDiagnosticsOpen(true)}
+          onRetrySync={handleRetrySync}
+          canEdit={master}
+        />
+      )}
+
+      {currentView === 'admin-sites' && master && (
+        <AdminSiteList
+          sites={sites}
+          isLoading={isLoadingSites}
+          onRefresh={() => void fetchSites()}
+          onSelectSite={(siteId) => void openSite(siteId)}
+          onGoToRegister={() => setCurrentView('register')}
+        />
+      )}
+
+      {currentView === 'admin-logs' && master && (
+        <AdminUploadLogs onOpenSite={(siteId) => void openSite(siteId)} />
+      )}
+
+      {currentView === 'admin-issues' && master && (
+        <AdminIssues
+          defaultSiteId={selectedSiteId ?? undefined}
+          onOpenSite={(siteId) => void openSite(siteId)}
+          canEdit
+        />
+      )}
+
+      {currentView === 'admin-settings' && master && (
+        <AdminSettings role={session!.role} onSettingsChanged={loadPublicConfig} />
+      )}
+
+      {currentView === 'admin-accounts' && session && <AdminAccounts session={session} />}
+    </>
+  );
+
   return (
     <div className="min-h-screen bg-slate-100 text-slate-900 flex flex-col font-sans">
       <Header
-        currentView={currentView}
         session={session}
         config={publicConfig}
         onNavigate={navigate}
         onOpenDiagnostics={() => setIsDiagnosticsOpen(true)}
         onLogout={() => void handleLogout()}
+        onOpenMenu={() => setIsDrawerOpen(true)}
+        isMobilePreview={isMobilePreview}
+        onToggleMobilePreview={() => setIsMobilePreview((prev) => !prev)}
       />
 
-      <main className="flex-1">
-        {currentView === 'register' && (
-          <ExternalSubmissionForm
-            onSubmit={handleSiteSubmit}
-            isSubmitting={isSubmitting}
-            constructionTypes={publicConfig?.constructionTypes ?? []}
-          />
+      <div className="flex-1 flex min-h-0">
+        {/* Sidebar — always present from lg up. */}
+        <aside className="hidden lg:block w-60 shrink-0 border-r border-slate-200 bg-white">
+          <div className="sticky top-16">
+            <Sidebar currentView={currentView} session={session} onNavigate={navigate} />
+          </div>
+        </aside>
+
+        {/* Drawer — the same nav on phones, where 90% of submissions come from. */}
+        {isDrawerOpen && (
+          <div className="lg:hidden fixed inset-0 z-40 flex">
+            <div className="absolute inset-0 bg-black/50" onClick={() => setIsDrawerOpen(false)} />
+            <div className="relative w-64 max-w-[80vw] bg-white shadow-xl overflow-y-auto">
+              <div className="flex items-center justify-between px-4 h-14 border-b border-slate-200">
+                <span className="text-sm font-bold text-slate-800">메뉴</span>
+                <button
+                  type="button"
+                  onClick={() => setIsDrawerOpen(false)}
+                  className="p-1.5 rounded-lg text-slate-500 hover:bg-slate-100"
+                  aria-label="메뉴 닫기"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <Sidebar
+                currentView={currentView}
+                session={session}
+                onNavigate={navigate}
+                onNavigated={() => setIsDrawerOpen(false)}
+              />
+            </div>
+          </div>
         )}
 
-        {currentView === 'completed' && submittedSite && (
-          <SubmissionSuccessView
-            site={submittedSite}
-            onNewSubmission={() => {
-              setSubmittedSite(null);
-              setCurrentView('register');
-            }}
-          />
-        )}
-
-        {currentView === 'admin-login' &&
-          (isCheckingSession ? (
-            <p className="py-24 text-center text-xs text-slate-400">확인 중...</p>
+        <main className="flex-1 min-w-0">
+          {isMobilePreview ? (
+            // A real 390px viewport rather than a scaled screenshot, so the
+            // same breakpoints the phone hits are the ones being previewed.
+            <div className="py-6 px-4 flex flex-col items-center">
+              <p className="mb-3 text-xs font-semibold text-slate-500">
+                모바일 미리보기 · 390 × 780
+              </p>
+              <div className="w-[390px] h-[780px] max-w-full rounded-[2rem] border-8 border-slate-800 bg-slate-100 overflow-y-auto overflow-x-hidden shadow-2xl">
+                {content}
+              </div>
+            </div>
           ) : (
-            <AdminLogin
-              onAuthenticated={(authenticated) => {
-                setSession(authenticated);
-                setCurrentView('admin-sites');
-              }}
-              onCancel={() => setCurrentView('register')}
-            />
-          ))}
-
-        {currentView === 'admin-sites' && session && (
-          <AdminSiteList
-            sites={sites}
-            isLoading={isLoadingSites}
-            onRefresh={() => void fetchSites()}
-            onSelectSite={(siteId) => void openSite(siteId)}
-            onGoToRegister={() => setCurrentView('register')}
-          />
-        )}
-
-        {currentView === 'admin-detail' && session && selectedSite && (
-          <AdminSiteDetail
-            site={selectedSite}
-            onBack={() => setCurrentView('admin-sites')}
-            onSelectFileForPreview={setPreviewFile}
-            onOpenSharePointInspector={() => setIsDiagnosticsOpen(true)}
-            onRetrySync={handleRetrySync}
-            canEdit={canEdit(session.role)}
-          />
-        )}
-
-        {currentView === 'admin-logs' && session && (
-          <AdminUploadLogs onOpenSite={(siteId) => void openSite(siteId)} />
-        )}
-
-        {currentView === 'admin-issues' && session && (
-          <AdminIssues
-            defaultSiteId={selectedSiteId ?? undefined}
-            onOpenSite={(siteId) => void openSite(siteId)}
-            canEdit={canEdit(session.role)}
-          />
-        )}
-
-        {currentView === 'admin-settings' && session && (
-          <AdminSettings
-            role={session.role}
-            onConstructionTypesChanged={(constructionTypes) =>
-              // Keeps the submission form in step without a page reload.
-              setPublicConfig((prev) => (prev ? { ...prev, constructionTypes } : prev))
-            }
-          />
-        )}
-
-        {currentView === 'admin-accounts' && session?.role === 'MASTER' && (
-          <AdminAccounts currentUsername={session.username} />
-        )}
-      </main>
+            content
+          )}
+        </main>
+      </div>
 
       <UploadProgressModal
         isOpen={showProgressModal}

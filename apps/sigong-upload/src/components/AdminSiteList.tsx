@@ -132,7 +132,7 @@ export const AdminSiteList: React.FC<AdminSiteListProps> = ({
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="주소, 담당자, 날짜, 현장ID 검색..."
+            placeholder="주소, 시공기사, 날짜, 현장ID 검색..."
             className="w-full pl-9 pr-4 py-2 rounded-lg border border-slate-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 text-xs sm:text-sm focus:outline-hidden transition-all"
           />
         </div>
@@ -205,7 +205,7 @@ export const AdminSiteList: React.FC<AdminSiteListProps> = ({
                 <tr>
                   <th className="py-3 px-4">시공일</th>
                   <th className="py-3 px-4">현장 주소</th>
-                  <th className="py-3 px-4">담당자</th>
+                  <th className="py-3 px-4">시공기사</th>
                   <th className="py-3 px-4">첨부파일</th>
                   <th className="py-3 px-4">등록일시</th>
                   <th className="py-3 px-4">상태</th>
@@ -243,7 +243,7 @@ export const AdminSiteList: React.FC<AdminSiteListProps> = ({
                         )}
                       </td>
 
-                      {/* 담당자 */}
+                      {/* 시공기사 */}
                       <td className="py-3.5 px-4 whitespace-nowrap">
                         <div className="flex items-center gap-1.5 font-medium text-slate-800">
                           <User className="w-3.5 h-3.5 text-slate-400" />

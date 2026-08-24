@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   Info,
   Loader2,
+  Mail,
   Plus,
   RefreshCw,
   Settings,
@@ -11,13 +12,13 @@ import {
   XCircle,
 } from 'lucide-react';
 import { adminApi } from '../api';
-import { canEdit } from '../types';
+import { isMaster } from '../types';
 import type { AdminRole } from '../types';
 
 interface AdminSettingsProps {
   role: AdminRole;
   /** Lets the public submission form pick up the change without a reload. */
-  onConstructionTypesChanged: (types: string[]) => void;
+  onSettingsChanged: () => void;
 }
 
 /**
@@ -27,25 +28,24 @@ interface AdminSettingsProps {
  * edited here rather than typed by submitters. Removing a type only stops it
  * being offered from now on — folders already created keep their name.
  */
-export const AdminSettings: React.FC<AdminSettingsProps> = ({
-  role,
-  onConstructionTypesChanged,
-}) => {
+export const AdminSettings: React.FC<AdminSettingsProps> = ({ role, onSettingsChanged }) => {
   const [types, setTypes] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [deleteEmail, setDeleteEmail] = useState('');
+  const [savedDeleteEmail, setSavedDeleteEmail] = useState('');
 
-  const readOnly = !canEdit(role);
+  const readOnly = !isMaster(role);
 
   const apply = useCallback(
     (list: string[]) => {
       setTypes(list);
-      onConstructionTypesChanged(list);
+      onSettingsChanged();
     },
-    [onConstructionTypesChanged]
+    [onSettingsChanged]
   );
 
   const load = useCallback(async () => {
@@ -63,7 +63,34 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({
 
   useEffect(() => {
     void load();
+    adminApi
+      .technicians()
+      .then(({ deleteRequestEmail }) => {
+        setDeleteEmail(deleteRequestEmail);
+        setSavedDeleteEmail(deleteRequestEmail);
+      })
+      .catch(() => undefined);
   }, [load]);
+
+  const handleSaveDeleteEmail = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setBusy('email');
+    setError(null);
+    try {
+      const { deleteRequestEmail } = await adminApi.setDeleteRequestEmail(deleteEmail);
+      setDeleteEmail(deleteRequestEmail);
+      setSavedDeleteEmail(deleteRequestEmail);
+      setNotice(
+        deleteRequestEmail
+          ? `삭제 요청 수신 메일을 ${deleteRequestEmail} (으)로 설정했습니다.`
+          : '삭제 요청 수신 메일을 비웠습니다.'
+      );
+    } catch (err: any) {
+      setError(err?.message || '메일 주소 저장에 실패했습니다.');
+    } finally {
+      setBusy(null);
+    }
+  };
 
   const handleAdd = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -156,7 +183,7 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({
         {readOnly ? (
           <div className="flex items-start gap-2 p-3 rounded-lg bg-slate-50 border border-slate-200 text-xs text-slate-600 mb-4">
             <Info className="w-4 h-4 shrink-0 mt-0.5 text-slate-400" />
-            <span>일반 권한 계정은 목록을 볼 수만 있습니다. 변경은 관리자에게 요청해 주세요.</span>
+            <span>이 설정은 마스터관리자만 변경할 수 있습니다.</span>
           </div>
         ) : (
           <form onSubmit={handleAdd} className="flex flex-wrap items-center gap-2 mb-5">
@@ -228,6 +255,38 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({
             제출 화면에 반영됩니다.
           </span>
         </div>
+      </div>
+
+      {/* 삭제 요청 수신 메일 */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-5 sm:p-6 mt-4">
+        <h3 className="text-base font-bold text-slate-900 mb-1">삭제 요청 수신 메일</h3>
+        <p className="text-xs text-slate-500 mb-4">
+          업체 관리자가 시공기사 명부에서 삭제를 시도하면, 이 주소로 요청하라는 안내창이 뜹니다.
+          비워 두면 &quot;마스터관리자에게 문의&quot; 로만 안내됩니다.
+        </p>
+
+        <form onSubmit={handleSaveDeleteEmail} className="flex flex-wrap items-center gap-2">
+          <input
+            type="email"
+            value={deleteEmail}
+            onChange={(event) => setDeleteEmail(event.target.value)}
+            placeholder="예: admin@urotech.co.kr"
+            disabled={readOnly}
+            className="flex-1 min-w-[220px] px-3 py-2.5 rounded-lg border border-slate-300 text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-50"
+          />
+          <button
+            type="submit"
+            disabled={readOnly || busy === 'email' || deleteEmail === savedDeleteEmail}
+            className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-bold"
+          >
+            {busy === 'email' ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <Mail className="w-3.5 h-3.5" />
+            )}
+            <span>저장</span>
+          </button>
+        </form>
       </div>
     </div>
   );

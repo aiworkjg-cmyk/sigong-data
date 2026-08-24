@@ -1,13 +1,20 @@
 import { Router } from 'express';
 import type { Response } from 'express';
-import { AdminError } from '../admin-directory';
-import { requireEditor, requireMaster } from '../auth';
+import { AdminError, scopeOf } from '../admin-directory';
+import { requireManager, requireMaster } from '../auth';
 import { config } from '../config';
 import { mailer } from '../mailer';
 import { SettingsError } from '../settings';
 import type { AppContext } from '../context';
 import { ASSIGNABLE_ROLES } from '../../src/types';
-import type { AssignableRole, Issue, IssuePriority, IssueStatus } from '../../src/types';
+import type {
+  AssignableRole,
+  Issue,
+  SiteRecord,
+  IssuePriority,
+  IssueStatus,
+  ViewScope,
+} from '../../src/types';
 import { cleanText, clientIp, generateId } from '../util';
 
 const ISSUE_STATUSES: IssueStatus[] = ['OPEN', 'IN_PROGRESS', 'RESOLVED'];
@@ -29,6 +36,63 @@ function readRole(value: unknown): AssignableRole | undefined {
     : undefined;
 }
 
+function readStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === 'string' && entry.trim() !== '')
+    : [];
+}
+
+const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+function readDate(value: unknown): string | undefined {
+  return typeof value === 'string' && DATE_PATTERN.test(value) ? value : undefined;
+}
+
+/**
+ * Combines the account's scope with the filters the user picked.
+ *
+ * The scope always wins: a 업체 관리자 asking for a 시공종류 outside their remit
+ * gets the intersection, which is empty, rather than someone else's data.
+ */
+/** Whether one record falls inside the caller's scope. */
+function canRead(scope: ViewScope, site: SiteRecord): boolean {
+  if (scope.all) return true;
+  if (scope.technicianId) {
+    return (site.technicians || []).some((tech) => tech.id === scope.technicianId);
+  }
+  return scope.constructionTypes.includes(site.constructionType);
+}
+
+function resolveSiteFilter(scope: ViewScope, query: Record<string, unknown>) {
+  const requested = readStringArray(
+    typeof query.constructionType === 'string' ? [query.constructionType] : query.constructionType
+  );
+
+  // An empty array means "match nothing", so it must only ever be produced
+  // deliberately — a role whose boundary is not 시공종류 gets undefined instead,
+  // otherwise a 시공기사 (who has no company scope) would see zero records.
+  let constructionTypes: string[] | undefined;
+  if (scope.all || scope.technicianId) {
+    constructionTypes = requested.length ? requested : undefined;
+  } else {
+    constructionTypes = requested.length
+      ? scope.constructionTypes.filter((type) => requested.includes(type))
+      : scope.constructionTypes;
+  }
+
+  // A technician only ever sees their own; a wider role may filter by one.
+  const technicianId =
+    scope.technicianId ??
+    (typeof query.technicianId === 'string' && query.technicianId ? query.technicianId : undefined);
+
+  return {
+    constructionTypes,
+    technicianId,
+    from: readDate(query.from),
+    to: readDate(query.to),
+  };
+}
+
 export function createAdminRouter(ctx: AppContext): Router {
   const router = Router();
 
@@ -36,7 +100,7 @@ export function createAdminRouter(ctx: AppContext): Router {
   /* Diagnostics                                                       */
   /* ---------------------------------------------------------------- */
 
-  router.get('/diagnostics', async (_req, res) => {
+  router.get('/diagnostics', requireMaster, async (_req, res) => {
     const sharePoint = ctx.sharePoint.getConfigStatus();
     // Only probe live credentials; test mode has nothing to reach.
     const connectivity = sharePoint.isLiveConfigured ? await ctx.sharePoint.probe() : null;
@@ -55,7 +119,7 @@ export function createAdminRouter(ctx: AppContext): Router {
     });
   });
 
-  router.get('/folders', async (req, res) => {
+  router.get('/folders', requireMaster, async (req, res) => {
     try {
       const folderPath = typeof req.query.path === 'string' ? req.query.path : '';
       const entries = await ctx.sharePoint.listFolder(
@@ -68,10 +132,56 @@ export function createAdminRouter(ctx: AppContext): Router {
   });
 
   /* ---------------------------------------------------------------- */
-  /* Sites                                                             */
+  /* 시공현황 리스트 — every signed-in role, narrowed to its own scope    */
   /* ---------------------------------------------------------------- */
 
-  router.get('/sites', async (req, res) => {
+  /**
+   * The list behind the 시공현황 리스트 screen.
+   *
+   * Unlike /sites (master-only, the full console) this is reachable by every
+   * signed-in account and is always narrowed by the caller's scope, resolved
+   * server-side from the stored account.
+   */
+  router.get('/history', async (req, res) => {
+    try {
+      const scope = scopeOf(req.admin!);
+      const filter = resolveSiteFilter(scope, req.query as Record<string, unknown>);
+
+      // A 업체 관리자 with no 시공종류 assigned yet has no boundary to apply, so
+      // answer empty rather than unfiltered — and say why, so the screen can
+      // tell them to ask the master instead of showing a bare empty list.
+      if (!scope.all && !scope.technicianId && scope.constructionTypes.length === 0) {
+        res.json({ items: [], scope, needsScope: true });
+        return;
+      }
+
+      const page = await ctx.repos.sites.list({
+        ...filter,
+        limit: parseLimit(req.query.limit, 100),
+        cursor: cursorOf(req.query.cursor),
+      });
+
+      res.json({ ...page, scope });
+    } catch (err: any) {
+      res.status(500).json({ error: '시공현황 조회 실패', message: err?.message });
+    }
+  });
+
+  /** Options for the 시공현황 필터 — only what this account may narrow by. */
+  router.get('/history/filters', (req, res) => {
+    const scope = scopeOf(req.admin!);
+    res.json({
+      constructionTypes: scope.all ? ctx.settings.constructionTypes() : scope.constructionTypes,
+      technicians: scope.technicianId ? [] : ctx.settings.technicians(),
+      scope,
+    });
+  });
+
+  /* ---------------------------------------------------------------- */
+  /* Sites — full console, master only                                 */
+  /* ---------------------------------------------------------------- */
+
+  router.get('/sites', requireMaster, async (req, res) => {
     try {
       const page = await ctx.repos.sites.list({
         limit: parseLimit(req.query.limit),
@@ -83,9 +193,15 @@ export function createAdminRouter(ctx: AppContext): Router {
     }
   });
 
+  /**
+   * One record. Reachable by every signed-in role but scope-checked, so the
+   * 시공현황 리스트 can open a submission without exposing another company's.
+   * A record outside the scope answers 404, not 403 — knowing that an id exists
+   * is itself information the caller is not entitled to.
+   */
   router.get('/sites/:id', async (req, res) => {
     const site = await ctx.repos.sites.get(req.params.id);
-    if (!site) {
+    if (!site || !canRead(scopeOf(req.admin!), site)) {
       res.status(404).json({ error: '현장을 찾을 수 없습니다.' });
       return;
     }
@@ -96,7 +212,7 @@ export function createAdminRouter(ctx: AppContext): Router {
    * Queues another filing attempt. Returns straight away — progress shows up in
    * the record's status, the same path an automatic retry takes.
    */
-  router.post('/sites/:id/retry', requireEditor, async (req, res) => {
+  router.post('/sites/:id/retry', requireMaster, async (req, res) => {
     const site = await ctx.repos.sites.get(req.params.id);
     if (!site) {
       res.status(404).json({ error: '현장을 찾을 수 없습니다.' });
@@ -123,6 +239,10 @@ export function createAdminRouter(ctx: AppContext): Router {
     const site = await ctx.repos.sites.get(req.params.siteId);
     const file = site?.files.find((candidate) => candidate.id === req.params.fileId);
 
+    if (site && !canRead(scopeOf(req.admin!), site)) {
+      res.status(404).json({ error: '파일을 찾을 수 없습니다.' });
+      return;
+    }
     if (!site || !file || !file.remotePath) {
       res.status(404).json({ error: '파일을 찾을 수 없습니다.' });
       return;
@@ -158,7 +278,7 @@ export function createAdminRouter(ctx: AppContext): Router {
   /* Upload logs                                                       */
   /* ---------------------------------------------------------------- */
 
-  router.get('/logs', async (req, res) => {
+  router.get('/logs', requireMaster, async (req, res) => {
     try {
       const result = typeof req.query.result === 'string' ? req.query.result : undefined;
       const page = await ctx.repos.logs.list({
@@ -174,7 +294,7 @@ export function createAdminRouter(ctx: AppContext): Router {
     }
   });
 
-  router.get('/logs/summary', async (req, res) => {
+  router.get('/logs/summary', requireMaster, async (req, res) => {
     try {
       const days = Math.min(Math.max(Number(req.query.days) || 30, 1), 365);
       res.json(await ctx.repos.logs.summary(days));
@@ -187,7 +307,7 @@ export function createAdminRouter(ctx: AppContext): Router {
   /* Issues                                                            */
   /* ---------------------------------------------------------------- */
 
-  router.get('/issues', async (req, res) => {
+  router.get('/issues', requireMaster, async (req, res) => {
     try {
       const status = typeof req.query.status === 'string' ? req.query.status : undefined;
       const page = await ctx.repos.issues.list({
@@ -202,7 +322,7 @@ export function createAdminRouter(ctx: AppContext): Router {
     }
   });
 
-  router.post('/issues', requireEditor, async (req, res) => {
+  router.post('/issues', requireMaster, async (req, res) => {
     const title = cleanText(req.body?.title, 200);
     if (!title) {
       res.status(400).json({ error: '입력 오류', message: '이슈 제목을 입력해 주세요.' });
@@ -228,7 +348,7 @@ export function createAdminRouter(ctx: AppContext): Router {
     res.status(201).json({ issue });
   });
 
-  router.patch('/issues/:id', requireEditor, async (req, res) => {
+  router.patch('/issues/:id', requireMaster, async (req, res) => {
     const issue = await ctx.repos.issues.get(req.params.id);
     if (!issue) {
       res.status(404).json({ error: '이슈를 찾을 수 없습니다.' });
@@ -246,7 +366,7 @@ export function createAdminRouter(ctx: AppContext): Router {
     res.json({ issue });
   });
 
-  router.post('/issues/:id/comments', requireEditor, async (req, res) => {
+  router.post('/issues/:id/comments', requireMaster, async (req, res) => {
     const issue = await ctx.repos.issues.get(req.params.id);
     if (!issue) {
       res.status(404).json({ error: '이슈를 찾을 수 없습니다.' });
@@ -271,7 +391,7 @@ export function createAdminRouter(ctx: AppContext): Router {
     res.status(201).json({ issue });
   });
 
-  router.delete('/issues/:id', requireEditor, async (req, res) => {
+  router.delete('/issues/:id', requireMaster, async (req, res) => {
     await ctx.repos.issues.remove(req.params.id);
     res.json({ success: true });
   });
@@ -293,7 +413,7 @@ export function createAdminRouter(ctx: AppContext): Router {
     res.json({ constructionTypes: ctx.settings.constructionTypes() });
   });
 
-  router.post('/settings/construction-types', requireEditor, async (req, res) => {
+  router.post('/settings/construction-types', requireMaster, async (req, res) => {
     try {
       const constructionTypes = await ctx.settings.addConstructionType(
         cleanText(req.body?.name, 40)
@@ -308,7 +428,7 @@ export function createAdminRouter(ctx: AppContext): Router {
    * Removes a type from the selectable list. Submissions already filed under it
    * keep their folder — this only stops the value being offered from now on.
    */
-  router.delete('/settings/construction-types/:name', requireEditor, async (req, res) => {
+  router.delete('/settings/construction-types/:name', requireMaster, async (req, res) => {
     try {
       const constructionTypes = await ctx.settings.removeConstructionType(req.params.name);
       res.json({ constructionTypes });
@@ -318,7 +438,79 @@ export function createAdminRouter(ctx: AppContext): Router {
   });
 
   /* ---------------------------------------------------------------- */
-  /* Admin accounts (master only)                                      */
+  /* 시공기사 명부                                                      */
+  /* ---------------------------------------------------------------- */
+
+  /** Readable by everyone signed in — the roster is also the filter list. */
+  router.get('/technicians', (_req, res) => {
+    res.json({
+      technicians: ctx.settings.technicians(),
+      deleteRequestEmail: ctx.settings.deleteRequestEmail(),
+    });
+  });
+
+  router.post('/technicians', requireManager, async (req, res) => {
+    try {
+      const technician = await ctx.settings.addTechnician({
+        name: cleanText(req.body?.name, 40),
+        title: String(req.body?.title || ''),
+        createdBy: req.admin?.username || '',
+      });
+      res.status(201).json({ technician, technicians: ctx.settings.technicians() });
+    } catch (err) {
+      handleSettingsError(err, res);
+    }
+  });
+
+  router.patch('/technicians/:id', requireManager, async (req, res) => {
+    try {
+      const technician = await ctx.settings.updateTechnician(req.params.id, {
+        name: typeof req.body?.name === 'string' ? cleanText(req.body.name, 40) : undefined,
+        title: typeof req.body?.title === 'string' ? req.body.title : undefined,
+      });
+      res.json({ technician, technicians: ctx.settings.technicians() });
+    } catch (err) {
+      handleSettingsError(err, res);
+    }
+  });
+
+  /**
+   * Master only. A 업체 관리자 hitting this gets 403 with the address to write
+   * to, which is what the client turns into the "삭제 요청" popup.
+   */
+  router.delete('/technicians/:id', requireMaster, async (req, res) => {
+    try {
+      // Deleting the roster entry would orphan any account linked to it.
+      if (await ctx.directory.isTechnicianLinked(req.params.id)) {
+        res.status(409).json({
+          error: '삭제 불가',
+          message: '이 기사에 연결된 로그인 계정이 있습니다. 계정을 먼저 삭제해 주세요.',
+        });
+        return;
+      }
+
+      await ctx.settings.removeTechnician(req.params.id);
+      res.json({ technicians: ctx.settings.technicians() });
+    } catch (err) {
+      handleSettingsError(err, res);
+    }
+  });
+
+  /* ---------------------------------------------------------------- */
+  /* 삭제 요청 수신 메일 (master only)                                   */
+  /* ---------------------------------------------------------------- */
+
+  router.put('/settings/delete-request-email', requireMaster, async (req, res) => {
+    try {
+      const email = await ctx.settings.setDeleteRequestEmail(String(req.body?.email ?? ''));
+      res.json({ deleteRequestEmail: email });
+    } catch (err) {
+      handleSettingsError(err, res);
+    }
+  });
+
+  /* ---------------------------------------------------------------- */
+  /* Accounts — master, plus 업체 관리자 for its own 시공기사 logins       */
   /* ---------------------------------------------------------------- */
 
   /** Turns an AdminError into its intended status instead of a blanket 500. */
@@ -331,56 +523,72 @@ export function createAdminRouter(ctx: AppContext): Router {
     res.status(500).json({ error: '계정 관리 실패', message: '요청을 처리하지 못했습니다.' });
   };
 
-  router.get('/accounts', requireMaster, async (_req, res) => {
+  router.get('/accounts', requireManager, async (req, res) => {
     try {
-      res.json({ accounts: await ctx.directory.list() });
+      res.json({ accounts: await ctx.directory.list(req.admin!) });
     } catch (err) {
       handleAdminError(err, res);
     }
   });
 
-  router.post('/accounts', requireMaster, async (req, res) => {
+  router.post('/accounts', requireManager, async (req, res) => {
     try {
       const account = await ctx.directory.create({
         username: cleanText(req.body?.username, 32),
         displayName: cleanText(req.body?.displayName, 40),
         password: String(req.body?.password || ''),
-        // Default to 관리자 so an older client that posts no role keeps working.
-        role: readRole(req.body?.role) ?? 'ADMIN',
-        createdBy: req.admin?.username || 'master',
+        role: readRole(req.body?.role) ?? 'TECH',
+        constructionTypes: readStringArray(req.body?.constructionTypes),
+        technicianId: cleanText(req.body?.technicianId, 40) || undefined,
+        actor: req.admin!,
       });
-      res.status(201).json({ account });
+      res.status(201).json({ account, accounts: await ctx.directory.list(req.admin!) });
     } catch (err) {
       handleAdminError(err, res);
     }
   });
 
-  router.patch('/accounts/:username', requireMaster, async (req, res) => {
+  router.patch('/accounts/:username', requireManager, async (req, res) => {
     try {
       const { username } = req.params;
+      // One ownership check up front covers every field below.
+      await ctx.directory.assertCanManage(username, req.admin!);
 
       if (typeof req.body?.disabled === 'boolean') {
         await ctx.directory.setDisabled(username, req.body.disabled);
       }
 
-      const role = readRole(req.body?.role);
-      if (role) {
-        await ctx.directory.setRole(username, role);
+      // Only the master reshapes what a role or a scope means.
+      if (req.admin!.role === 'MASTER') {
+        const role = readRole(req.body?.role);
+        if (role) await ctx.directory.setRole(username, role);
+
+        if (Array.isArray(req.body?.constructionTypes)) {
+          await ctx.directory.setConstructionTypes(
+            username,
+            readStringArray(req.body.constructionTypes)
+          );
+        }
+        if (typeof req.body?.technicianId === 'string' && req.body.technicianId) {
+          await ctx.directory.setTechnicianId(username, req.body.technicianId);
+        }
       }
+
       if (typeof req.body?.password === 'string' && req.body.password) {
         await ctx.directory.resetPassword(username, req.body.password);
       }
 
-      res.json({ accounts: await ctx.directory.list() });
+      res.json({ accounts: await ctx.directory.list(req.admin!) });
     } catch (err) {
       handleAdminError(err, res);
     }
   });
 
-  router.delete('/accounts/:username', requireMaster, async (req, res) => {
+  router.delete('/accounts/:username', requireManager, async (req, res) => {
     try {
+      await ctx.directory.assertCanManage(req.params.username, req.admin!);
       await ctx.directory.remove(req.params.username);
-      res.json({ accounts: await ctx.directory.list() });
+      res.json({ accounts: await ctx.directory.list(req.admin!) });
     } catch (err) {
       handleAdminError(err, res);
     }

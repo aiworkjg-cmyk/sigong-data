@@ -6,6 +6,40 @@
 export type FileKind = 'image' | 'video' | 'other';
 export type StorageMode = 'LIVE' | 'TEST_MODE';
 
+/* ------------------------------------------------------------------ */
+/* 시공기사 명부                                                        */
+/* ------------------------------------------------------------------ */
+
+export const TECHNICIAN_TITLES = ['팀장', '사수', '부사수'] as const;
+export type TechnicianTitle = (typeof TECHNICIAN_TITLES)[number];
+
+/** One person on the roster. Selected on the submission form, never typed. */
+export interface Technician {
+  id: string;
+  name: string;
+  title: TechnicianTitle;
+  createdAt: string;
+  createdBy: string;
+}
+
+/**
+ * The roster entries attached to a submission, copied at submission time.
+ *
+ * Held as a snapshot rather than a reference so renaming or promoting someone
+ * later does not silently rewrite what past records say. The id is kept so a
+ * 시공기사 account can still find its own history after a rename.
+ */
+export interface SiteTechnician {
+  id: string;
+  name: string;
+  title: TechnicianTitle;
+}
+
+/** "홍길동(팀장), 김철수(사수)" — display and folder-name form. */
+export function formatTechnicians(technicians: SiteTechnician[]): string {
+  return technicians.map((tech) => `${tech.name}(${tech.title})`).join(', ');
+}
+
 export interface SiteFile {
   id: string;
   /** Name as the submitter had it on their device. */
@@ -38,6 +72,9 @@ export interface SiteRecord {
   id: string;
   /** Product line, chosen from the configured list (백조 / 인덕션 / ...). */
   constructionType: string;
+  /** Roster entries chosen on the form. May hold several people. */
+  technicians: SiteTechnician[];
+  /** technicians rendered as one string — display, search, and folder token. */
   managerName: string;
   address: string;
   constructionDate: string; // YYYY-MM-DD
@@ -144,53 +181,87 @@ export interface UploadProgressItem {
 }
 
 /**
- * MASTER is the single env-configured account: it can manage other admins and
- * cannot be deleted. ADMIN and STAFF accounts are stored in the record backend.
+ * Account roles.
  *
- *   MASTER  마스터 — everything, including account management
- *   ADMIN   관리자 — everything except account management
- *   STAFF   일반   — read-only: can look, cannot change anything
+ *   MASTER   마스터관리자 — the single env-configured account. Sees every
+ *                           company's data and holds every setting.
+ *   COMPANY  관리자       — 업체 관계자 (백조 / 한샘 ...). Sees submissions for
+ *                           the 시공종류 assigned to the account, and nothing else.
+ *   TECH     시공기사     — linked to a roster entry; sees only the submissions
+ *                           they were listed on.
+ *
+ * MASTER lives in environment configuration rather than the record store, so a
+ * lost or corrupted table can never lock everyone out.
  */
-export type AdminRole = 'MASTER' | 'ADMIN' | 'STAFF';
+export type AdminRole = 'MASTER' | 'COMPANY' | 'TECH';
 
-/** Roles the master can hand out when creating an account. */
-export const ASSIGNABLE_ROLES = ['ADMIN', 'STAFF'] as const;
+/** Roles that can be handed out when creating an account. */
+export const ASSIGNABLE_ROLES = ['COMPANY', 'TECH'] as const;
 export type AssignableRole = (typeof ASSIGNABLE_ROLES)[number];
 
 export const ROLE_LABELS: Record<AdminRole, string> = {
-  MASTER: '마스터',
-  ADMIN: '관리자',
-  STAFF: '일반',
+  MASTER: '마스터관리자',
+  COMPANY: '관리자',
+  TECH: '시공기사',
 };
 
 export const ROLE_DESCRIPTIONS: Record<AdminRole, string> = {
-  MASTER: '모든 기능 + 계정 관리',
-  ADMIN: '자료·이슈·설정 변경 가능 (계정 관리 불가)',
-  STAFF: '조회만 가능 (변경 불가)',
+  MASTER: '모든 업체의 자료와 전체 설정',
+  COMPANY: '담당 시공종류의 시공현황 전체 조회 · 기사 명부 관리',
+  TECH: '본인이 참여한 시공 자료만 조회',
 };
 
-/** Roles allowed to change data: retry uploads, edit issues, edit settings. */
-export function canEdit(role: AdminRole | undefined): boolean {
-  return role === 'MASTER' || role === 'ADMIN';
+/** Only the master reaches the full admin console (로그·이슈·설정·계정). */
+export function isMaster(role: AdminRole | undefined): boolean {
+  return role === 'MASTER';
+}
+
+/** 마스터와 업체 관리자 — the two roles that manage the technician roster. */
+export function canManageTechnicians(role: AdminRole | undefined): boolean {
+  return role === 'MASTER' || role === 'COMPANY';
+}
+
+/** Only the master may delete roster entries; others must request by mail. */
+export function canDeleteTechnicians(role: AdminRole | undefined): boolean {
+  return role === 'MASTER';
 }
 
 export interface AdminSession {
   username: string;
   displayName: string;
   role: AdminRole;
+  /** COMPANY: the 시공종류 this account may read. Empty for other roles. */
+  constructionTypes: string[];
+  /** TECH: the roster entry this account is. */
+  technicianId?: string;
   /** ISO expiry of the signed session cookie. */
   expiresAt: string;
 }
 
-/** An additional admin account. The password hash never leaves the server. */
+/** A stored account. The password hash never leaves the server. */
 export interface AdminUser {
   username: string;
   displayName: string;
   role: AdminRole;
+  /** COMPANY only — which 시공종류 the account may read. */
+  constructionTypes: string[];
+  /** TECH only — the roster entry this account is linked to. */
+  technicianId?: string;
   createdAt: string;
   createdBy: string;
   disabled: boolean;
   lastLoginAt?: string;
+}
+
+/**
+ * What a signed-in account is allowed to see in 시공현황 리스트.
+ * Resolved on the server; the client never decides its own scope.
+ */
+export interface ViewScope {
+  /** true for MASTER — no filtering at all. */
+  all: boolean;
+  constructionTypes: string[];
+  technicianId?: string;
 }
 
 /** Public-facing progress for the submitter's confirmation screen. */
@@ -205,6 +276,8 @@ export interface SubmissionStatus {
 export interface PublicConfig {
   mode: StorageMode;
   constructionTypes: string[];
+  /** Selectable roster for the submission form. */
+  technicians: Technician[];
   maxFiles: number;
   maxFileSizeMb: number;
 }

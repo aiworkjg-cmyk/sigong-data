@@ -23,6 +23,7 @@ import {
 import { SiteRecord, SiteFile } from '../types';
 import { fileContentUrl } from '../api';
 import { statusMeta } from '../status';
+import { titleStyle } from '../technicians';
 
 interface AdminSiteDetailProps {
   site: SiteRecord;
@@ -158,12 +159,25 @@ export const AdminSiteDetail: React.FC<AdminSiteDetailProps> = ({
 
         {/* Info Grid */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-5 text-sm">
-          {/* 담당자 */}
+          {/* 시공기사 */}
           <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-100">
             <span className="text-xs text-slate-500 block mb-1 flex items-center gap-1">
-              <User className="w-3.5 h-3.5 text-slate-400" /> 담당자 이름
+              <User className="w-3.5 h-3.5 text-slate-400" /> 시공기사
             </span>
-            <p className="font-bold text-slate-900">{site.managerName}</p>
+            {(site.technicians || []).length > 0 ? (
+              <div className="flex flex-wrap gap-1">
+                {site.technicians.map((tech) => (
+                  <span
+                    key={tech.id}
+                    className={`px-2 py-0.5 rounded-md border text-xs font-bold ${titleStyle(tech.title).chip}`}
+                  >
+                    {tech.name} · {tech.title}
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <p className="font-bold text-slate-900">{site.managerName}</p>
+            )}
           </div>
 
           {/* 시공일 */}

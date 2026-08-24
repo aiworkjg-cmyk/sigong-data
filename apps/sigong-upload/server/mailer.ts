@@ -70,7 +70,7 @@ export class Mailer {
     const rows: Array<[string, string]> = [
       ['시공종류', record.constructionType],
       ['현장 주소', record.address],
-      ['담당자', record.managerName],
+      ['시공기사', record.managerName],
       ['시공일', record.constructionDate],
       ['현장 ID', record.id],
       ['접수 시각', new Date(record.createdAt).toLocaleString('ko-KR')],

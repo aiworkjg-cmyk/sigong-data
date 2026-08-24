@@ -103,10 +103,10 @@ export const SubmissionSuccessView: React.FC<SubmissionSuccessViewProps> = ({
         </h3>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
-          {/* 담당자 */}
+          {/* 시공기사 */}
           <div className="bg-slate-50 p-3 rounded-lg border border-slate-100">
             <span className="text-xs text-slate-500 block mb-0.5 flex items-center gap-1">
-              <User className="w-3.5 h-3.5 text-slate-400" /> 담당자
+              <User className="w-3.5 h-3.5 text-slate-400" /> 시공기사
             </span>
             <span className="font-semibold text-slate-900">{site.managerName}</span>
           </div>

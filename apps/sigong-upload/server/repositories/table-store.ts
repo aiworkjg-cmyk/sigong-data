@@ -1,10 +1,12 @@
 import { TableClient, TableServiceClient, odata } from '@azure/data-tables';
 import { DefaultAzureCredential } from '@azure/identity';
 import { config } from '../config';
+import { matchesSiteFilter } from './json-store';
 import { TERMINAL_STATUSES } from '../../src/types';
 import type { Issue, Paged, SiteRecord, UploadLog } from '../../src/types';
 import {
   descendingKey,
+  normalizeStoredAdmin,
   type AdminUserRepository,
   type StoredAdminUser,
   type IssueFilter,
@@ -12,6 +14,7 @@ import {
   type ListOptions,
   type Repositories,
   type SettingsRepository,
+  type SiteFilter,
   type SiteRepository,
   type UploadLogFilter,
   type UploadLogRepository,
@@ -111,9 +114,15 @@ function siteToEntity(site: SiteRecord) {
     syncedAt: site.syncedAt || '',
     retryAvailable: Boolean(site.retryAvailable),
     attempts: site.attempts ?? 0,
-    // Table Storage has no nested types; the file list rides along as JSON.
+    // Table Storage has no nested types; lists ride along as JSON.
     filesJson: JSON.stringify(site.files || []),
+    techniciansJson: JSON.stringify(site.technicians || []),
   };
+}
+
+/** OData string literals escape a single quote by doubling it. */
+function escapeOdata(value: string): string {
+  return value.replace(/'/g, "''");
 }
 
 function entityToSite(entity: any): SiteRecord {
@@ -135,6 +144,7 @@ function entityToSite(entity: any): SiteRecord {
     retryAvailable: Boolean(entity.retryAvailable),
     attempts: Number(entity.attempts) || 0,
     files: entity.filesJson ? JSON.parse(entity.filesJson) : [],
+    technicians: entity.techniciansJson ? JSON.parse(entity.techniciansJson) : [],
   };
 }
 
@@ -144,10 +154,25 @@ class TableSiteRepository implements SiteRepository {
 
   constructor(private readonly client: TableClient) {}
 
-  async list(options: ListOptions = {}): Promise<Paged<SiteRecord>> {
+  async list(options: SiteFilter = {}): Promise<Paged<SiteRecord>> {
+    const clauses = [`PartitionKey eq '${SITES_PARTITION}'`];
+
+    // 시공종류 and the date range are real columns, so push them down to the
+    // service. The technician list lives inside a JSON column and cannot be
+    // queried there, so it is applied to each page after it comes back — that
+    // can yield a short page, but the cursor still advances correctly.
+    if (options.constructionTypes?.length) {
+      const types = options.constructionTypes
+        .map((type) => `constructionType eq '${escapeOdata(type)}'`)
+        .join(' or ');
+      clauses.push(`(${types})`);
+    }
+    if (options.from) clauses.push(`constructionDate ge '${escapeOdata(options.from)}'`);
+    if (options.to) clauses.push(`constructionDate le '${escapeOdata(options.to)}'`);
+
     const page = await readPage(
       this.client,
-      odata`PartitionKey eq ${SITES_PARTITION}`,
+      clauses.join(' and '),
       options.limit ?? DEFAULT_LIMIT,
       options.cursor,
       (entity) => {
@@ -155,7 +180,11 @@ class TableSiteRepository implements SiteRepository {
         return entityToSite(entity);
       }
     );
-    return page;
+
+    return {
+      ...page,
+      items: page.items.filter((site) => matchesSiteFilter(site, options)),
+    };
   }
 
   private async findEntity(id: string): Promise<any | null> {
@@ -248,6 +277,9 @@ class TableAdminUserRepository implements AdminUserRepository {
         rowKey: user.username,
         displayName: user.displayName,
         role: user.role,
+        // Table Storage has no list type; the scope rides along as JSON.
+        constructionTypesJson: JSON.stringify(user.constructionTypes || []),
+        technicianId: user.technicianId || '',
         passwordHash: user.passwordHash,
         createdAt: user.createdAt,
         createdBy: user.createdBy,
@@ -268,17 +300,28 @@ class TableAdminUserRepository implements AdminUserRepository {
 }
 
 function entityToAdminUser(entity: any): StoredAdminUser {
-  return {
+  let constructionTypes: string[] = [];
+  try {
+    const parsed = JSON.parse(entity.constructionTypesJson || '[]');
+    if (Array.isArray(parsed)) constructionTypes = parsed;
+  } catch {
+    // A malformed scope must not break the login path; an empty scope shows
+    // nothing, which the master can then correct in 계정 관리.
+    constructionTypes = [];
+  }
+
+  return normalizeStoredAdmin({
     username: entity.rowKey,
-    displayName: entity.displayName || entity.rowKey,
-    // Rows written before roles existed carry no role; those accounts are 관리자.
-    role: entity.role === 'STAFF' ? 'STAFF' : 'ADMIN',
-    passwordHash: entity.passwordHash || '',
+    displayName: entity.displayName,
+    role: entity.role,
+    constructionTypes,
+    technicianId: entity.technicianId,
+    passwordHash: entity.passwordHash,
     createdAt: entity.createdAt,
-    createdBy: entity.createdBy || '',
-    disabled: Boolean(entity.disabled),
-    lastLoginAt: entity.lastLoginAt || undefined,
-  };
+    createdBy: entity.createdBy,
+    disabled: entity.disabled,
+    lastLoginAt: entity.lastLoginAt,
+  });
 }
 
 /* ------------------------------------------------------------------ */

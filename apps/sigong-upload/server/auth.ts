@@ -1,12 +1,12 @@
 import crypto from 'crypto';
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 import { config } from './config';
-import { canEdit } from '../src/types';
+import { canManageTechnicians } from '../src/types';
 import type { AdminRole, AdminSession } from '../src/types';
 
 const COOKIE_NAME = 'sigong_admin';
 const SCRYPT_KEYLEN = 64;
-const ROLES: AdminRole[] = ['MASTER', 'ADMIN', 'STAFF'];
+const ROLES: AdminRole[] = ['MASTER', 'COMPANY', 'TECH'];
 
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
@@ -101,9 +101,21 @@ function parseCookies(header: string | undefined): Record<string, string> {
   return jar;
 }
 
+/**
+ * Note the cookie carries only the username, role and expiry — never the
+ * account's scope. The scope is re-read from the store on every request, so
+ * revoking a company's access takes effect at once instead of when the cookie
+ * happens to expire.
+ */
 export function issueSession(
   res: Response,
-  admin: { username: string; displayName: string; role: AdminRole }
+  admin: {
+    username: string;
+    displayName: string;
+    role: AdminRole;
+    constructionTypes: string[];
+    technicianId?: string;
+  }
 ): AdminSession {
   const expiresAt = Date.now() + config.admin.sessionHours * 3600 * 1000;
   const body = Buffer.from(
@@ -122,6 +134,8 @@ export function issueSession(
     username: admin.username,
     displayName: admin.displayName,
     role: admin.role,
+    constructionTypes: admin.constructionTypes,
+    technicianId: admin.technicianId,
     expiresAt: new Date(expiresAt).toISOString(),
   };
 }
@@ -156,9 +170,13 @@ export function readSessionToken(
 
 /** Directory lookup used to confirm a session's account is still active. */
 export interface SessionResolver {
-  resolveActive(
-    username: string
-  ): Promise<{ username: string; displayName: string; role: AdminRole } | null>;
+  resolveActive(username: string): Promise<{
+    username: string;
+    displayName: string;
+    role: AdminRole;
+    constructionTypes: string[];
+    technicianId?: string;
+  } | null>;
 }
 
 /**
@@ -179,6 +197,8 @@ export async function resolveSession(
     username: active.username,
     displayName: active.displayName,
     role: active.role,
+    constructionTypes: active.constructionTypes,
+    technicianId: active.technicianId,
     expiresAt: token.expiresAt,
   };
 }
@@ -212,14 +232,15 @@ export function requireMaster(req: Request, res: Response, next: NextFunction): 
 }
 
 /**
- * Blocks 일반(STAFF) accounts from anything that writes. They keep full read
- * access; the UI hides these controls, and this is the check that enforces it.
+ * Allows 마스터 and 업체 관리자 through — the two roles that maintain the
+ * technician roster and issue 시공기사 logins. The UI hides these controls from
+ * a 시공기사, and this is the check that actually enforces it.
  */
-export function requireEditor(req: Request, res: Response, next: NextFunction): void {
-  if (!canEdit(req.admin?.role)) {
+export function requireManager(req: Request, res: Response, next: NextFunction): void {
+  if (!canManageTechnicians(req.admin?.role)) {
     res.status(403).json({
       error: '권한 없음',
-      message: '일반 권한 계정은 조회만 가능합니다. 관리자에게 문의해 주세요.',
+      message: '시공기사 계정은 조회만 가능합니다. 관리자에게 문의해 주세요.',
     });
     return;
   }

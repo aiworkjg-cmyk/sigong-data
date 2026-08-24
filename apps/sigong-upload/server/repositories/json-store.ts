@@ -3,6 +3,7 @@ import path from 'path';
 import { config } from '../config';
 import { TERMINAL_STATUSES } from '../../src/types';
 import type { Issue, Paged, SiteRecord, UploadLog } from '../../src/types';
+import { normalizeStoredAdmin } from './types';
 import type {
   AdminUserRepository,
   IssueFilter,
@@ -10,6 +11,7 @@ import type {
   ListOptions,
   Repositories,
   SettingsRepository,
+  SiteFilter,
   SiteRepository,
   StoredAdminUser,
   UploadLogFilter,
@@ -79,6 +81,19 @@ class JsonCollection<T> {
   }
 }
 
+/** Shared by the JSON store and by the Table store's in-memory second pass. */
+export function matchesSiteFilter(site: SiteRecord, filter: SiteFilter): boolean {
+  if (filter.constructionTypes && !filter.constructionTypes.includes(site.constructionType)) {
+    return false;
+  }
+  if (filter.technicianId && !(site.technicians || []).some((t) => t.id === filter.technicianId)) {
+    return false;
+  }
+  if (filter.from && site.constructionDate < filter.from) return false;
+  if (filter.to && site.constructionDate > filter.to) return false;
+  return true;
+}
+
 /** Offset-based paging; the cursor is just the next index as a string. */
 function paginate<T>(items: T[], options: ListOptions = {}): Paged<T> {
   const limit = options.limit ?? DEFAULT_LIMIT;
@@ -91,10 +106,11 @@ function paginate<T>(items: T[], options: ListOptions = {}): Paged<T> {
 class JsonSiteRepository implements SiteRepository {
   constructor(private readonly collection: JsonCollection<SiteRecord>) {}
 
-  async list(options?: ListOptions): Promise<Paged<SiteRecord>> {
-    const sorted = [...this.collection.all()].sort(
-      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-    );
+  async list(options: SiteFilter = {}): Promise<Paged<SiteRecord>> {
+    const sorted = this.collection
+      .all()
+      .filter((site) => matchesSiteFilter(site, options))
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
     return paginate(sorted, options);
   }
 
@@ -118,20 +134,15 @@ class JsonSiteRepository implements SiteRepository {
 class JsonAdminUserRepository implements AdminUserRepository {
   constructor(private readonly collection: JsonCollection<StoredAdminUser>) {}
 
-  /** Accounts stored before roles existed have no role field; those are 관리자. */
-  private withRole(user: StoredAdminUser): StoredAdminUser {
-    return user.role === 'STAFF' ? user : { ...user, role: 'ADMIN' };
-  }
-
   async list(): Promise<StoredAdminUser[]> {
     return [...this.collection.all()]
-      .map((user) => this.withRole(user))
+      .map(normalizeStoredAdmin)
       .sort((a, b) => a.username.localeCompare(b.username));
   }
 
   async get(username: string): Promise<StoredAdminUser | null> {
     const user = this.collection.all().find((candidate) => candidate.username === username);
-    return user ? this.withRole(user) : null;
+    return user ? normalizeStoredAdmin(user) : null;
   }
 
   async save(user: StoredAdminUser): Promise<void> {

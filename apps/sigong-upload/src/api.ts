@@ -11,7 +11,9 @@ import type {
   SharePointConfigStatus,
   SiteRecord,
   SubmissionStatus,
+  Technician,
   UploadLog,
+  ViewScope,
 } from './types';
 
 export class ApiError extends Error {
@@ -148,7 +150,57 @@ export const adminApi = {
       method: 'DELETE',
     }),
 
-  /* Settings — readable by every admin, editable by 마스터/관리자. */
+  /* 시공현황 리스트 — every signed-in role; the server narrows the result. */
+
+  history: (
+    options: {
+      constructionType?: string;
+      technicianId?: string;
+      from?: string;
+      to?: string;
+      limit?: number;
+      cursor?: string;
+    } = {}
+  ) =>
+    request<Paged<SiteRecord> & { scope: ViewScope; needsScope?: boolean }>(
+      `/api/admin/history${query(options)}`
+    ),
+
+  historyFilters: () =>
+    request<{ constructionTypes: string[]; technicians: Technician[]; scope: ViewScope }>(
+      '/api/admin/history/filters'
+    ),
+
+  /* 시공기사 명부 */
+
+  technicians: () =>
+    request<{ technicians: Technician[]; deleteRequestEmail: string }>('/api/admin/technicians'),
+
+  addTechnician: (input: { name: string; title: string }) =>
+    request<{ technician: Technician; technicians: Technician[] }>('/api/admin/technicians', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+
+  updateTechnician: (id: string, patch: { name?: string; title?: string }) =>
+    request<{ technician: Technician; technicians: Technician[] }>(
+      `/api/admin/technicians/${encodeURIComponent(id)}`,
+      { method: 'PATCH', body: JSON.stringify(patch) }
+    ),
+
+  /** Master only — others receive 403 and are shown the request-by-mail popup. */
+  deleteTechnician: (id: string) =>
+    request<{ technicians: Technician[] }>(`/api/admin/technicians/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    }),
+
+  setDeleteRequestEmail: (email: string) =>
+    request<{ deleteRequestEmail: string }>('/api/admin/settings/delete-request-email', {
+      method: 'PUT',
+      body: JSON.stringify({ email }),
+    }),
+
+  /* Settings — readable by every admin, editable by 마스터. */
 
   constructionTypes: () =>
     request<{ constructionTypes: string[] }>('/api/admin/settings/construction-types'),
@@ -174,15 +226,23 @@ export const adminApi = {
     displayName: string;
     password: string;
     role: AssignableRole;
+    constructionTypes?: string[];
+    technicianId?: string;
   }) =>
-    request<{ account: AdminUser }>('/api/admin/accounts', {
+    request<{ account: AdminUser; accounts: AdminUser[] }>('/api/admin/accounts', {
       method: 'POST',
       body: JSON.stringify(input),
     }),
 
   updateAccount: (
     username: string,
-    patch: { disabled?: boolean; password?: string; role?: AssignableRole }
+    patch: {
+      disabled?: boolean;
+      password?: string;
+      role?: AssignableRole;
+      constructionTypes?: string[];
+      technicianId?: string;
+    }
   ) =>
     request<{ accounts: AdminUser[] }>(`/api/admin/accounts/${encodeURIComponent(username)}`, {
       method: 'PATCH',

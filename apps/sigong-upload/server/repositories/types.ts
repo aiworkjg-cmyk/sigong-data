@@ -5,8 +5,23 @@ export interface ListOptions {
   cursor?: string;
 }
 
+/**
+ * Narrows a site listing. Every field is an AND; an omitted field is "any".
+ *
+ * `constructionTypes` and `technicianId` are the permission boundary — the
+ * route fills them from the signed-in account's scope, never from the query
+ * string — while the date range and search are the user's own filters.
+ */
+export interface SiteFilter extends ListOptions {
+  constructionTypes?: string[];
+  technicianId?: string;
+  /** Inclusive 시공일 range, YYYY-MM-DD. */
+  from?: string;
+  to?: string;
+}
+
 export interface SiteRepository {
-  list(options?: ListOptions): Promise<Paged<SiteRecord>>;
+  list(options?: SiteFilter): Promise<Paged<SiteRecord>>;
   get(id: string): Promise<SiteRecord | null>;
   save(record: SiteRecord): Promise<void>;
   /**
@@ -59,13 +74,48 @@ export interface IssueRepository {
 export interface StoredAdminUser {
   username: string;
   displayName: string;
-  /** 관리자(ADMIN) or 일반(STAFF). Rows written before roles existed read as ADMIN. */
+  /** 관리자(COMPANY) or 시공기사(TECH). */
   role: AssignableRole;
+  /** COMPANY only — the 시공종류 this account may read. */
+  constructionTypes: string[];
+  /** TECH only — the roster entry this account is linked to. */
+  technicianId?: string;
   passwordHash: string;
   createdAt: string;
   createdBy: string;
   disabled: boolean;
   lastLoginAt?: string;
+}
+
+/**
+ * Normalizes a stored row into the current shape.
+ *
+ * Accounts written under the previous two-role model carry ADMIN / STAFF and no
+ * scope fields. ADMIN was "everything but accounts", which is closest to the new
+ * 업체 관리자; STAFF was read-only, which is closest to 시공기사. Neither has a
+ * scope yet, so both land with an empty one and the master assigns it — a
+ * migrated account can therefore log in but sees nothing until that happens,
+ * which is the safe direction to fail.
+ */
+export function normalizeStoredAdmin(raw: any): StoredAdminUser {
+  const legacy = raw?.role === 'ADMIN' ? 'COMPANY' : raw?.role === 'STAFF' ? 'TECH' : null;
+  const role: AssignableRole =
+    raw?.role === 'COMPANY' || raw?.role === 'TECH' ? raw.role : (legacy ?? 'TECH');
+
+  return {
+    username: raw.username,
+    displayName: raw.displayName || raw.username,
+    role,
+    constructionTypes: Array.isArray(raw.constructionTypes)
+      ? raw.constructionTypes.filter((value: unknown) => typeof value === 'string')
+      : [],
+    technicianId: raw.technicianId || undefined,
+    passwordHash: raw.passwordHash || '',
+    createdAt: raw.createdAt || '',
+    createdBy: raw.createdBy || '',
+    disabled: Boolean(raw.disabled),
+    lastLoginAt: raw.lastLoginAt || undefined,
+  };
 }
 
 export interface AdminUserRepository {

@@ -3,6 +3,7 @@ import { Router } from 'express';
 import type { Request } from 'express';
 import multer from 'multer';
 import { config } from '../config';
+import { formatTechnicians } from '../../src/types';
 import type { AppContext } from '../context';
 import { stagingDirFor, storedNameFor } from '../submission';
 import {
@@ -19,6 +20,19 @@ interface SubmissionRequest extends Request {
 }
 
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Roster ids from a multipart body. A single-value field arrives as a string
+ * and a repeated one as an array, so both shapes are normalized here.
+ */
+function readIds(value: unknown): string[] {
+  const raw = Array.isArray(value) ? value : typeof value === 'string' ? [value] : [];
+  return raw
+    .flatMap((entry) => String(entry).split(','))
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .slice(0, 20);
+}
 
 /**
  * Attachments are streamed to disk rather than buffered. Fifty 100MB videos
@@ -76,6 +90,7 @@ export function createPublicRouter(ctx: AppContext): Router {
     res.json({
       mode: ctx.sharePoint.getConfigStatus().mode,
       constructionTypes: ctx.settings.constructionTypes(),
+      technicians: ctx.settings.technicians(),
       maxFiles: config.uploads.maxFiles,
       maxFileSizeMb: Math.floor(config.uploads.maxFileSizeBytes / (1024 * 1024)),
     });
@@ -140,7 +155,11 @@ export function createPublicRouter(ctx: AppContext): Router {
       const files = (req.files as Express.Multer.File[]) || [];
 
       const constructionType = cleanText(req.body?.constructionType, 40);
-      const managerName = cleanText(req.body?.managerName, 60);
+      // The form posts roster ids, never free text — the names and titles are
+      // resolved here so a crafted request cannot invent a technician.
+      const technicians = ctx.settings
+        .resolveTechnicians(readIds(req.body?.technicianIds))
+        .map((tech) => ({ id: tech.id, name: tech.name, title: tech.title }));
       const address = cleanText(req.body?.address, 300);
       const constructionDate = cleanText(req.body?.constructionDate, 10);
       const notes = cleanText(req.body?.notes, 2000);
@@ -155,7 +174,7 @@ export function createPublicRouter(ctx: AppContext): Router {
       if (!ctx.settings.constructionTypes().includes(constructionType)) {
         return reject('시공종류를 선택해 주세요.');
       }
-      if (!managerName) return reject('담당자 이름을 입력해 주세요.');
+      if (technicians.length === 0) return reject('시공기사를 1명 이상 선택해 주세요.');
       if (!address) return reject('현장 주소를 입력해 주세요.');
       if (!DATE_PATTERN.test(constructionDate)) return reject('시공일을 달력에서 선택해 주세요.');
       if (files.length === 0) return reject('사진 또는 동영상을 1개 이상 첨부해 주세요.');
@@ -170,7 +189,16 @@ export function createPublicRouter(ctx: AppContext): Router {
         // immediately. Filing into the library continues on the worker, so the
         // submitter is never held on the page waiting for SharePoint.
         const record = await ctx.intake.accept(
-          { siteId, constructionType, managerName, address, constructionDate, notes, ...actor },
+          {
+            siteId,
+            constructionType,
+            technicians,
+            managerName: formatTechnicians(technicians),
+            address,
+            constructionDate,
+            notes,
+            ...actor,
+          },
           files
         );
 

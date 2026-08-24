@@ -1,8 +1,10 @@
 import React, { useState, useRef } from 'react';
+import { TechnicianPicker } from './TechnicianPicker';
+import type { Technician } from '../types';
 import {
   Upload,
   Calendar,
-  User,
+  HardHat,
   MapPin,
   FileText,
   Image,
@@ -28,7 +30,7 @@ interface SelectedFileItem {
 interface ExternalSubmissionFormProps {
   onSubmit: (formData: {
     constructionType: string;
-    managerName: string;
+    technicianIds: string[];
     address: string;
     constructionDate: string;
     notes: string;
@@ -37,6 +39,8 @@ interface ExternalSubmissionFormProps {
   isSubmitting: boolean;
   /** Selectable 시공종류, served by the API so the list stays configurable. */
   constructionTypes: string[];
+  /** Selectable 시공기사 명부, likewise served by the API. */
+  technicians: Technician[];
 }
 
 const MAX_FILES = 50;
@@ -63,9 +67,10 @@ export const ExternalSubmissionForm: React.FC<ExternalSubmissionFormProps> = ({
   onSubmit,
   isSubmitting,
   constructionTypes,
+  technicians,
 }) => {
   const [constructionType, setConstructionType] = useState('');
-  const [managerName, setManagerName] = useState('');
+  const [technicianIds, setTechnicianIds] = useState<string[]>([]);
   const [address, setAddress] = useState('');
   const [constructionDate, setConstructionDate] = useState(getTodayString());
   const [notes, setNotes] = useState('');
@@ -74,7 +79,7 @@ export const ExternalSubmissionForm: React.FC<ExternalSubmissionFormProps> = ({
   // Validation errors
   const [errors, setErrors] = useState<{
     constructionType?: string;
-    managerName?: string;
+    technicians?: string;
     address?: string;
     constructionDate?: string;
     files?: string;
@@ -197,8 +202,8 @@ export const ExternalSubmissionForm: React.FC<ExternalSubmissionFormProps> = ({
   const validateForm = (): boolean => {
     const errs: typeof errors = {};
 
-    if (!managerName.trim()) {
-      errs.managerName = '담당자 이름을 입력해 주세요.';
+    if (technicianIds.length === 0) {
+      errs.technicians = '시공기사를 1명 이상 선택해 주세요.';
     }
 
     if (!constructionType) {
@@ -233,7 +238,7 @@ export const ExternalSubmissionForm: React.FC<ExternalSubmissionFormProps> = ({
 
     onSubmit({
       constructionType,
-      managerName: managerName.trim(),
+      technicianIds,
       address: address.trim(),
       constructionDate,
       notes: notes.trim(),
@@ -275,7 +280,7 @@ export const ExternalSubmissionForm: React.FC<ExternalSubmissionFormProps> = ({
         <div className="bg-white rounded-xl border border-slate-200 p-6 sm:p-7 shadow-xs">
           <div className="border-b border-slate-100 pb-4 mb-5 flex items-center justify-between">
             <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">
-              <User className="w-5 h-5 text-blue-600" />
+              <HardHat className="w-5 h-5 text-blue-600" />
               현장 기본 정보
             </h3>
             <span className="text-xs text-rose-600 font-medium">* 필수 입력 항목</span>
@@ -325,38 +330,30 @@ export const ExternalSubmissionForm: React.FC<ExternalSubmissionFormProps> = ({
               )}
             </div>
 
-            {/* 1. 담당자 이름 */}
+            {/* 1. 시공기사 — chosen from the roster, several allowed. */}
             <div>
-              <label htmlFor="input-manager-name" className="block text-sm font-semibold text-slate-800 mb-1.5">
-                담당자 이름 <span className="text-rose-500">*</span>
+              <label className="block text-sm font-semibold text-slate-800 mb-1.5">
+                시공기사 <span className="text-rose-500">*</span>
+                <span className="ml-1.5 text-xs font-normal text-slate-400">
+                  (여러 명 선택 가능)
+                </span>
               </label>
-              <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
-                  <User className="w-4 h-4" />
-                </div>
-                <input
-                  id="input-manager-name"
-                  type="text"
-                  value={managerName}
-                  onChange={(e) => {
-                    setManagerName(e.target.value);
-                    if (errors.managerName) {
-                      setErrors((prev) => ({ ...prev, managerName: undefined }));
-                    }
-                  }}
-                  placeholder="예: 홍길동 팀장"
-                  className={`w-full pl-10 pr-4 py-2.5 rounded-lg border text-sm focus:outline-hidden focus:ring-2 transition-all ${
-                    errors.managerName
-                      ? 'border-rose-300 focus:ring-rose-200 bg-rose-50/30'
-                      : 'border-slate-300 focus:border-blue-500 focus:ring-blue-100'
-                  }`}
-                  disabled={isSubmitting}
-                />
-              </div>
-              {errors.managerName && (
+              <TechnicianPicker
+                technicians={technicians}
+                selectedIds={technicianIds}
+                onChange={(ids) => {
+                  setTechnicianIds(ids);
+                  if (errors.technicians) {
+                    setErrors((prev) => ({ ...prev, technicians: undefined }));
+                  }
+                }}
+                disabled={isSubmitting}
+                hasError={Boolean(errors.technicians)}
+              />
+              {errors.technicians && (
                 <p className="mt-1.5 text-xs text-rose-600 flex items-center gap-1">
                   <AlertTriangle className="w-3.5 h-3.5" />
-                  {errors.managerName}
+                  {errors.technicians}
                 </p>
               )}
             </div>
@@ -417,7 +414,7 @@ export const ExternalSubmissionForm: React.FC<ExternalSubmissionFormProps> = ({
                     onClick={() => setDatePreset(-1)}
                     className="text-xs px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-md transition-colors"
                   >
-                    어제
+                    어제 날짜로 업로드
                   </button>
                 </div>
               </div>

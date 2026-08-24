@@ -3,12 +3,15 @@ import { sanitizeFileName } from '@jg/sharepoint-core';
 import type { SharePointService } from '@jg/sharepoint-core';
 import { config } from './config';
 import type { Repositories } from './repositories';
-import type { SiteFile, SiteRecord } from '../src/types';
+import type { SiteFile, SiteRecord, SiteTechnician } from '../src/types';
 import { classifyFile, formatBytes, generateId } from './util';
 
 export interface SubmissionInput {
   siteId: string;
   constructionType: string;
+  /** Roster entries chosen on the form; at least one. */
+  technicians: SiteTechnician[];
+  /** technicians rendered as one string — folder token and display. */
   managerName: string;
   address: string;
   constructionDate: string;
@@ -54,6 +57,7 @@ export class SubmissionIntake {
     const submission = {
       id: input.siteId,
       constructionType: input.constructionType,
+      technicians: input.technicians,
       managerName: input.managerName,
       address: input.address,
       constructionDate: input.constructionDate,
