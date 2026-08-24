@@ -144,7 +144,10 @@ export const MediaViewerModal: React.FC<MediaViewerModalProps> = ({ file, siteId
 
         {/* Footer info bar */}
         <div className="px-5 py-2.5 bg-slate-800 text-xs text-slate-400 flex items-center justify-between border-t border-slate-700 font-mono">
-          <span className="truncate">SharePoint 경로: {file.remotePath || '첨부파일/' + file.originalName}</span>
+          {/* Only present for the master — the server strips it for everyone else. */}
+          {file.remotePath && (
+            <span className="truncate">저장 경로: {file.remotePath}</span>
+          )}
           <span className="text-emerald-400 shrink-0 ml-2">상태: 정상 보관됨</span>
         </div>
       </div>

@@ -11,6 +11,7 @@ import { SubmissionSuccessView } from './components/SubmissionSuccessView';
 import { AdminLogin } from './components/AdminLogin';
 import { SiteHistory } from './components/SiteHistory';
 import { TechnicianManager } from './components/TechnicianManager';
+import { ConstructionTypeManager } from './components/ConstructionTypeManager';
 import { AdminSiteList } from './components/AdminSiteList';
 import { AdminSiteDetail } from './components/AdminSiteDetail';
 import { AdminUploadLogs } from './components/AdminUploadLogs';
@@ -22,6 +23,7 @@ import { AdminDiagnosticsModal } from './components/AdminDiagnosticsModal';
 
 /** Views only the master may open. Anyone else is bounced to 시공현황 리스트. */
 const MASTER_ONLY: AppView[] = [
+  'construction-types',
   'admin-sites',
   'admin-logs',
   'admin-issues',
@@ -324,6 +326,10 @@ export default function App() {
 
       {currentView === 'technicians' && session && <TechnicianManager session={session} />}
 
+      {currentView === 'construction-types' && master && (
+        <ConstructionTypeManager onChanged={loadPublicConfig} />
+      )}
+
       {currentView === 'admin-detail' && session && selectedSite && (
         <AdminSiteDetail
           site={selectedSite}
@@ -358,7 +364,7 @@ export default function App() {
       )}
 
       {currentView === 'admin-settings' && master && (
-        <AdminSettings role={session!.role} onSettingsChanged={loadPublicConfig} />
+        <AdminSettings role={session!.role} />
       )}
 
       {currentView === 'admin-accounts' && session && <AdminAccounts session={session} />}

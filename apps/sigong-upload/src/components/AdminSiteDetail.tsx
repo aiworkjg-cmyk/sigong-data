@@ -24,6 +24,7 @@ import { SiteRecord, SiteFile } from '../types';
 import { fileContentUrl } from '../api';
 import { statusMeta } from '../status';
 import { titleStyle } from '../technicians';
+import { typeStyle } from '../constructionTypes';
 
 interface AdminSiteDetailProps {
   site: SiteRecord;
@@ -92,14 +93,16 @@ export const AdminSiteDetail: React.FC<AdminSiteDetailProps> = ({
         </button>
 
         <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={onOpenSharePointInspector}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 text-xs font-semibold transition-colors"
-          >
-            <FolderTree className="w-3.5 h-3.5" />
-            <span>SharePoint 폴더 구조 확인</span>
-          </button>
+          {canEdit && (
+            <button
+              type="button"
+              onClick={onOpenSharePointInspector}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 text-xs font-semibold transition-colors"
+            >
+              <FolderTree className="w-3.5 h-3.5" />
+              <span>SharePoint 폴더 구조 확인</span>
+            </button>
+          )}
 
           {canEdit && (
             <button
@@ -129,12 +132,16 @@ export const AdminSiteDetail: React.FC<AdminSiteDetailProps> = ({
               >
                 {statusMeta(site.status).label}
               </span>
-              <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200">
+              <span
+                className={`px-2 py-0.5 rounded-full text-[11px] font-bold border ${typeStyle(site.constructionType).chip}`}
+              >
                 {site.constructionType}
               </span>
-              <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-slate-100 text-slate-600 border border-slate-200">
-                {site.storageMode === 'LIVE' ? 'SharePoint 연동' : '테스트 저장'}
-              </span>
+              {canEdit && (
+                <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-slate-100 text-slate-600 border border-slate-200">
+                  {site.storageMode === 'LIVE' ? '클라우드 저장' : '테스트 저장'}
+                </span>
+              )}
             </div>
             <div className="flex items-center gap-2 mt-1.5 text-xs text-slate-500 font-mono">
               <span>현장 ID: <strong>{site.id}</strong></span>
@@ -210,7 +217,9 @@ export const AdminSiteDetail: React.FC<AdminSiteDetailProps> = ({
             </p>
           </div>
 
-          {/* SharePoint Sync Details */}
+          {/* SharePoint Sync Details — master only; the storage layout is an
+              operations detail nobody else needs or can act on. */}
+          {canEdit && (
           <div className="bg-blue-50/70 p-4 rounded-xl border border-blue-200 sm:col-span-3">
             <div className="flex flex-wrap items-center justify-between gap-2 mb-1.5">
               <span className="text-xs font-bold text-blue-900 flex items-center gap-1.5">
@@ -235,6 +244,7 @@ export const AdminSiteDetail: React.FC<AdminSiteDetailProps> = ({
               )}
             </div>
           </div>
+          )}
         </div>
       </div>
 

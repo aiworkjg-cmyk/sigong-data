@@ -11,11 +11,15 @@ export function formatBytes(bytes: number, decimals = 1): string {
   return `${Number(value.toFixed(index === 0 ? 0 : decimals))} ${units[index]}`;
 }
 
-/** Short, unguessable, and readable enough to quote over the phone. */
-export function generateSiteId(at: Date = new Date()): string {
-  const date = at.toISOString().slice(0, 10).replace(/-/g, '');
-  const suffix = crypto.randomBytes(3).toString('hex').toUpperCase();
-  return `SITE-${date}-${suffix}`;
+/**
+ * Placeholder id used only while multer streams the attachments to disk.
+ *
+ * The real id (BAEKJO-20260824-001) needs the 시공종류 and 시공일, and those
+ * arrive as form fields that are not parsed until the upload finishes — so the
+ * staging folder is created under this temporary name and renamed afterwards.
+ */
+export function generateStagingId(): string {
+  return `TMP-${crypto.randomBytes(8).toString('hex').toUpperCase()}`;
 }
 
 export function generateId(prefix: string): string {

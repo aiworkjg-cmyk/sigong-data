@@ -54,6 +54,30 @@ function readDate(value: unknown): string | undefined {
  * The scope always wins: a 업체 관리자 asking for a 시공종류 outside their remit
  * gets the intersection, which is empty, rather than someone else's data.
  */
+/**
+ * Strips every trace of the storage backend from a record.
+ *
+ * Where the files physically live is an operations concern: a 업체 관계자 or a
+ * 시공기사 has no use for a SharePoint path, and leaking the library layout to
+ * accounts that cannot reach it is needless exposure. Attachments stay viewable
+ * because the viewer streams them through /files/:id/content, which resolves the
+ * real path server-side.
+ */
+function redactStorage(site: SiteRecord): SiteRecord {
+  return {
+    ...site,
+    folderPath: '',
+    attachmentsFolderPath: '',
+    webUrl: undefined,
+    syncMessage: undefined,
+    files: site.files.map((file) => ({
+      ...file,
+      remotePath: undefined,
+      webUrl: undefined,
+    })),
+  };
+}
+
 /** Whether one record falls inside the caller's scope. */
 function canRead(scope: ViewScope, site: SiteRecord): boolean {
   if (scope.all) return true;
@@ -161,7 +185,9 @@ export function createAdminRouter(ctx: AppContext): Router {
         cursor: cursorOf(req.query.cursor),
       });
 
-      res.json({ ...page, scope });
+      // Only the master ever sees storage internals.
+      const items = scope.all ? page.items : page.items.map(redactStorage);
+      res.json({ ...page, items, scope });
     } catch (err: any) {
       res.status(500).json({ error: '시공현황 조회 실패', message: err?.message });
     }
@@ -200,12 +226,13 @@ export function createAdminRouter(ctx: AppContext): Router {
    * is itself information the caller is not entitled to.
    */
   router.get('/sites/:id', async (req, res) => {
+    const scope = scopeOf(req.admin!);
     const site = await ctx.repos.sites.get(req.params.id);
-    if (!site || !canRead(scopeOf(req.admin!), site)) {
+    if (!site || !canRead(scope, site)) {
       res.status(404).json({ error: '현장을 찾을 수 없습니다.' });
       return;
     }
-    res.json({ site });
+    res.json({ site: scope.all ? site : redactStorage(site) });
   });
 
   /**

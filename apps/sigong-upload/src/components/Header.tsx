@@ -104,7 +104,9 @@ export const Header: React.FC<HeaderProps> = ({
             </button>
           )}
 
-          {!session && config && (
+          {/* Storage mode is an operations detail — master only. Submitters and
+              company accounts have nothing to do with which backend is live. */}
+          {isMaster(session?.role) && config && (
             <span className="hidden md:inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium bg-slate-100 text-slate-600 border border-slate-300">
               <FolderTree className="w-3.5 h-3.5 text-blue-600" />
               {config.mode === 'LIVE' ? '클라우드 저장 연동됨' : '테스트 저장 모드'}

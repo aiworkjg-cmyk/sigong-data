@@ -6,6 +6,7 @@ import {
   Lock,
   ScrollText,
   Settings,
+  Tags,
   ShieldCheck,
   Upload,
   Users,
@@ -18,6 +19,7 @@ export type AppView =
   | 'completed'
   | 'history'
   | 'technicians'
+  | 'construction-types'
   | 'admin-login'
   | 'admin-sites'
   | 'admin-detail'
@@ -45,13 +47,19 @@ const PRIMARY_ITEMS: NavItem[] = [
   { view: 'history', label: '시공현황 리스트', Icon: ClipboardList, requiresLogin: true },
 ];
 
-/** Roster management — 마스터 and 업체 관리자 only. */
+/** Roster management — 마스터 and 업체 관리자; 시공종류 is master-only. */
 const MANAGER_ITEMS: NavItem[] = [
   {
     view: 'technicians',
     label: '시공기사 관리',
     Icon: Users,
     visible: (session) => canManageTechnicians(session?.role),
+  },
+  {
+    view: 'construction-types',
+    label: '시공종류 관리',
+    Icon: Tags,
+    visible: (session) => isMaster(session?.role),
   },
 ];
 

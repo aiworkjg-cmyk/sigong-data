@@ -4,6 +4,7 @@ import { config, ensureDataDirs, validateConfig } from './config';
 import { mailer } from './mailer';
 import { createRepositories, type Repositories } from './repositories';
 import { SettingsService } from './settings';
+import { SiteIdFactory } from './site-id';
 import { SubmissionIntake } from './submission';
 import { SubmissionWorker } from './worker';
 
@@ -13,8 +14,10 @@ export interface AppContext {
   intake: SubmissionIntake;
   worker: SubmissionWorker;
   directory: AdminDirectory;
-  /** Admin-editable settings (시공종류 목록). */
+  /** Admin-editable settings (시공종류 목록, 기사 명부). */
   settings: SettingsService;
+  /** Hands out the sequential 현장 ID. */
+  siteIds: SiteIdFactory;
   /** Non-fatal configuration problems, shown in the admin diagnostics panel. */
   warnings: string[];
 }
@@ -41,6 +44,9 @@ export async function createContext(): Promise<AppContext> {
   // every upload against this list.
   const settings = new SettingsService(repos.settings);
   await settings.load();
+
+  const siteIds = new SiteIdFactory(repos.settings);
+  await siteIds.load();
   if (settings.constructionTypes().length === 0) {
     warnings.push('시공종류가 하나도 없습니다. 관리자 화면 > 설정에서 추가해야 자료 제출이 가능합니다.');
   }
@@ -65,6 +71,7 @@ export async function createContext(): Promise<AppContext> {
     worker,
     directory: new AdminDirectory(repos.admins),
     settings,
+    siteIds,
     warnings,
   };
 }

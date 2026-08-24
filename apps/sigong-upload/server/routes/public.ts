@@ -10,7 +10,7 @@ import {
   cleanText,
   clientIp,
   decodeMultipartFilename,
-  generateSiteId,
+  generateStagingId,
   removeQuietly,
 } from '../util';
 
@@ -127,8 +127,9 @@ export function createPublicRouter(ctx: AppContext): Router {
   router.post(
     '/sites',
     (req: SubmissionRequest, _res, next) => {
-      // Assigned up front so multer knows where to stage before any field is parsed.
-      req.siteId = generateSiteId();
+      // A placeholder so multer has somewhere to stage; the real id is assigned
+      // once the form fields have been parsed.
+      req.siteId = generateStagingId();
       next();
     },
     (req, res, next) => {
@@ -151,7 +152,7 @@ export function createPublicRouter(ctx: AppContext): Router {
       });
     },
     async (req: SubmissionRequest, res) => {
-      const siteId = req.siteId!;
+      let siteId = req.siteId!;
       const files = (req.files as Express.Multer.File[]) || [];
 
       const constructionType = cleanText(req.body?.constructionType, 40);
@@ -180,6 +181,21 @@ export function createPublicRouter(ctx: AppContext): Router {
       if (files.length === 0) return reject('사진 또는 동영상을 1개 이상 첨부해 주세요.');
 
       try {
+        // Now that the 시공종류 and 시공일 are known, swap the placeholder for the
+        // real id and move the staged files with it, so the worker can still
+        // find them from the stored record alone.
+        const finalId = await ctx.siteIds.next(constructionType, constructionDate, async (id) =>
+          Boolean(await ctx.repos.sites.get(id))
+        );
+        try {
+          await fs.promises.rename(stagingDirFor(siteId), stagingDirFor(finalId));
+          siteId = finalId;
+        } catch (err) {
+          // Keeping the placeholder id is ugly but harmless; losing the files
+          // would not be, so a failed rename must not abort the submission.
+          console.error(`[submit] 임시 폴더 이름 변경 실패 — ${siteId} 유지`, err);
+        }
+
         const actor = {
           clientIp: clientIp(req),
           userAgent: String(req.headers['user-agent'] || ''),

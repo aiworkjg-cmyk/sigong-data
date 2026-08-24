@@ -1,5 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { TechnicianPicker } from './TechnicianPicker';
+import { ConstructionTypePicker } from './ConstructionTypePicker';
 import type { Technician } from '../types';
 import {
   Upload,
@@ -293,35 +294,16 @@ export const ExternalSubmissionForm: React.FC<ExternalSubmissionFormProps> = ({
               <label className="block text-sm font-semibold text-slate-800 mb-1.5">
                 시공종류 <span className="text-rose-500">*</span>
               </label>
-              <div
-                id="construction-type-group"
-                role="radiogroup"
-                aria-label="시공종류"
-                className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2"
-              >
-                {constructionTypes.map((type) => {
-                  const selected = constructionType === type;
-                  return (
-                    <button
-                      key={type}
-                      type="button"
-                      role="radio"
-                      aria-checked={selected}
-                      onClick={() => {
-                        setConstructionType(type);
-                        setErrors((prev) => ({ ...prev, constructionType: undefined }));
-                      }}
-                      className={`px-3 py-3 rounded-xl border-2 text-sm font-bold transition-colors ${
-                        selected
-                          ? 'border-blue-600 bg-blue-50 text-blue-800'
-                          : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50'
-                      }`}
-                    >
-                      {type}
-                    </button>
-                  );
-                })}
-              </div>
+              <ConstructionTypePicker
+                types={constructionTypes}
+                value={constructionType}
+                onChange={(type) => {
+                  setConstructionType(type);
+                  setErrors((prev) => ({ ...prev, constructionType: undefined }));
+                }}
+                disabled={isSubmitting}
+                hasError={Boolean(errors.constructionType)}
+              />
               {errors.constructionType && (
                 <p className="mt-1.5 text-xs text-rose-600 flex items-center gap-1">
                   <AlertTriangle className="w-3.5 h-3.5" />
@@ -401,22 +383,13 @@ export const ExternalSubmissionForm: React.FC<ExternalSubmissionFormProps> = ({
                   시공일 (달력 선택) <span className="text-rose-500">*</span>
                 </label>
                 {/* Quick Presets */}
-                <div className="flex items-center gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => setDatePreset(0)}
-                    className="text-xs px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-md transition-colors"
-                  >
-                    오늘
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setDatePreset(-1)}
-                    className="text-xs px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-md transition-colors"
-                  >
-                    어제 날짜로 업로드
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  onClick={() => setDatePreset(-1)}
+                  className="text-xs px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-md transition-colors font-medium"
+                >
+                  어제 날짜로 업로드
+                </button>
               </div>
 
               <div className="relative">
