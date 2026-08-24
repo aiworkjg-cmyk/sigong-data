@@ -3,7 +3,9 @@ import {
   Check,
   Loader2,
   Mail,
+  MapPin,
   Pencil,
+  Phone,
   Plus,
   RefreshCw,
   Trash2,
@@ -13,7 +15,8 @@ import {
 } from 'lucide-react';
 import { adminApi } from '../api';
 import { titleStyle } from '../technicians';
-import { TECHNICIAN_TITLES, canDeleteTechnicians } from '../types';
+import { typeStyle } from '../constructionTypes';
+import { TECHNICIAN_TITLES, canDeleteTechnicians, isMaster } from '../types';
 import type { AdminSession, Technician, TechnicianTitle } from '../types';
 
 interface TechnicianManagerProps {
@@ -23,9 +26,18 @@ interface TechnicianManagerProps {
 interface Draft {
   name: string;
   title: TechnicianTitle;
+  constructionTypes: string[];
+  phone: string;
+  region: string;
 }
 
-const EMPTY_DRAFT: Draft = { name: '', title: '부사수' };
+const EMPTY_DRAFT: Draft = {
+  name: '',
+  title: '부사수',
+  constructionTypes: [],
+  phone: '',
+  region: '',
+};
 
 /**
  * 시공기사 명부.
@@ -34,9 +46,13 @@ const EMPTY_DRAFT: Draft = { name: '', title: '부사수' };
  * delete: a roster entry is referenced by every past submission and possibly by
  * a login, so removal is a decision that needs one owner. Everyone else gets a
  * popup pointing at the address the master configured.
+ *
+ * 업체 is what decides who can see whom — a 업체 관리자 is served only the
+ * entries carrying their own 업체, and can only tag within it.
  */
 export const TechnicianManager: React.FC<TechnicianManagerProps> = ({ session }) => {
   const [technicians, setTechnicians] = useState<Technician[]>([]);
+  const [assignableTypes, setAssignableTypes] = useState<string[]>([]);
   const [deleteRequestEmail, setDeleteRequestEmail] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
@@ -50,6 +66,7 @@ export const TechnicianManager: React.FC<TechnicianManagerProps> = ({ session })
   const [deleteRequest, setDeleteRequest] = useState<Technician | null>(null);
 
   const mayDelete = canDeleteTechnicians(session.role);
+  const master = isMaster(session.role);
 
   const load = useCallback(async () => {
     setIsLoading(true);
@@ -57,6 +74,7 @@ export const TechnicianManager: React.FC<TechnicianManagerProps> = ({ session })
     try {
       const result = await adminApi.technicians();
       setTechnicians(result.technicians);
+      setAssignableTypes(result.assignableTypes);
       setDeleteRequestEmail(result.deleteRequestEmail);
     } catch (err: any) {
       setError(err?.message || '시공기사 명부를 불러오지 못했습니다.');
@@ -76,7 +94,13 @@ export const TechnicianManager: React.FC<TechnicianManagerProps> = ({ session })
     setBusy('new');
     setError(null);
     try {
-      const { technicians: list } = await adminApi.addTechnician(draft);
+      const { technicians: list } = await adminApi.addTechnician({
+        name: draft.name,
+        title: draft.title,
+        constructionTypes: draft.constructionTypes,
+        phone: draft.phone,
+        region: draft.region,
+      });
       setTechnicians(list);
       setDraft(EMPTY_DRAFT);
       setIsComposing(false);
@@ -89,10 +113,32 @@ export const TechnicianManager: React.FC<TechnicianManagerProps> = ({ session })
   };
 
   const handleSaveEdit = async (id: string) => {
+    // Removing the last 업체 the editor owns makes the person vanish from their
+    // own list — legitimate, but never something to discover after the fact.
+    const losesVisibility =
+      !master &&
+      assignableTypes.length > 0 &&
+      !editDraft.constructionTypes.some((type) => assignableTypes.includes(type));
+
+    if (
+      losesVisibility &&
+      !window.confirm(
+        `${editDraft.name} 님에게서 담당 업체를 모두 해제하면 이 목록에서 더 이상 보이지 않게 됩니다. 계속할까요?`
+      )
+    ) {
+      return;
+    }
+
     setBusy(id);
     setError(null);
     try {
-      const { technicians: list } = await adminApi.updateTechnician(id, editDraft);
+      const { technicians: list } = await adminApi.updateTechnician(id, {
+        name: editDraft.name,
+        title: editDraft.title,
+        constructionTypes: editDraft.constructionTypes,
+        phone: editDraft.phone,
+        region: editDraft.region,
+      });
       setTechnicians(list);
       setEditingId(null);
       setNotice('기사 정보를 수정했습니다.');
@@ -126,6 +172,17 @@ export const TechnicianManager: React.FC<TechnicianManagerProps> = ({ session })
     }
   };
 
+  const startEdit = (tech: Technician) => {
+    setEditingId(tech.id);
+    setEditDraft({
+      name: tech.name,
+      title: tech.title,
+      constructionTypes: tech.constructionTypes,
+      phone: tech.phone ?? '',
+      region: tech.region ?? '',
+    });
+  };
+
   return (
     <div className="max-w-4xl mx-auto py-5 sm:py-8 px-3 sm:px-6">
       <div className="flex flex-wrap items-start justify-between gap-3 mb-5">
@@ -135,7 +192,9 @@ export const TechnicianManager: React.FC<TechnicianManagerProps> = ({ session })
             시공기사 관리
           </h2>
           <p className="text-xs text-slate-500 mt-1">
-            제출 화면에서 선택할 수 있는 기사 명부입니다.
+            {master
+              ? '제출 화면에서 선택할 수 있는 기사 명부입니다.'
+              : `담당 업체(${session.constructionTypes.join(', ')})의 기사만 표시됩니다.`}
             {!mayDelete && ' 삭제는 마스터관리자에게 요청해 주세요.'}
           </p>
         </div>
@@ -151,7 +210,11 @@ export const TechnicianManager: React.FC<TechnicianManagerProps> = ({ session })
           </button>
           <button
             type="button"
-            onClick={() => setIsComposing((prev) => !prev)}
+            onClick={() => {
+              setIsComposing((prev) => !prev);
+              // A company manager's additions default to their own 업체.
+              setDraft({ ...EMPTY_DRAFT, constructionTypes: master ? [] : assignableTypes });
+            }}
             className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold"
           >
             {isComposing ? <X className="w-3.5 h-3.5" /> : <Plus className="w-3.5 h-3.5" />}
@@ -174,25 +237,14 @@ export const TechnicianManager: React.FC<TechnicianManagerProps> = ({ session })
       {isComposing && (
         <form
           onSubmit={handleAdd}
-          className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 mb-4 space-y-3"
+          className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 mb-4 space-y-3.5"
         >
-          <div>
-            <label className="block text-xs font-bold text-slate-700 mb-1.5">이름</label>
-            <input
-              type="text"
-              value={draft.name}
-              onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-              placeholder="예: 홍길동"
-              maxLength={20}
-              required
-              className="w-full px-3 py-2.5 rounded-lg border border-slate-300 text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs font-bold text-slate-700 mb-1.5">직함</label>
-            <TitlePicker value={draft.title} onChange={(title) => setDraft({ ...draft, title })} />
-          </div>
+          <TechnicianFields
+            draft={draft}
+            onChange={setDraft}
+            assignableTypes={assignableTypes}
+            master={master}
+          />
 
           <button
             type="submit"
@@ -212,7 +264,9 @@ export const TechnicianManager: React.FC<TechnicianManagerProps> = ({ session })
       <div className="bg-white rounded-2xl border border-slate-200 divide-y divide-slate-100 overflow-hidden">
         {technicians.length === 0 && !isLoading ? (
           <p className="py-16 text-center text-xs text-slate-400">
-            등록된 시공기사가 없습니다. [기사 추가]로 명부를 만들어 주세요.
+            {master
+              ? '등록된 시공기사가 없습니다. [기사 추가]로 명부를 만들어 주세요.'
+              : '담당 업체로 등록된 시공기사가 없습니다.'}
           </p>
         ) : (
           technicians.map((tech) => {
@@ -220,97 +274,120 @@ export const TechnicianManager: React.FC<TechnicianManagerProps> = ({ session })
             const isEditing = editingId === tech.id;
             const isBusy = busy === tech.id;
 
-            return (
-              <div key={tech.id} className="flex items-center gap-2.5 px-3 sm:px-4 py-3">
-                <span className={`w-1.5 h-9 rounded-full shrink-0 ${style.accent}`} />
-
-                {isEditing ? (
-                  <div className="flex-1 min-w-0 space-y-2">
-                    <input
-                      type="text"
-                      value={editDraft.name}
-                      onChange={(e) => setEditDraft({ ...editDraft, name: e.target.value })}
-                      maxLength={20}
-                      className="w-full px-2.5 py-2 rounded-lg border border-slate-300 text-sm"
-                    />
-                    <TitlePicker
-                      value={editDraft.title}
-                      onChange={(title) => setEditDraft({ ...editDraft, title })}
-                      compact
-                    />
+            if (isEditing) {
+              return (
+                <div key={tech.id} className="px-3 sm:px-4 py-4 space-y-3.5 bg-slate-50/60">
+                  <TechnicianFields
+                    draft={editDraft}
+                    onChange={setEditDraft}
+                    assignableTypes={assignableTypes}
+                    master={master}
+                  />
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => void handleSaveEdit(tech.id)}
+                      disabled={isBusy}
+                      className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold disabled:opacity-60"
+                    >
+                      {isBusy ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <Check className="w-3.5 h-3.5" />
+                      )}
+                      저장
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditingId(null)}
+                      className="px-3 py-2 rounded-lg border border-slate-300 text-slate-600 hover:bg-white text-xs font-bold"
+                    >
+                      취소
+                    </button>
                   </div>
-                ) : (
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="text-sm font-bold text-slate-900 truncate">{tech.name}</span>
-                      <span
-                        className={`px-2 py-0.5 rounded-full border text-[11px] font-bold ${style.chip}`}
-                      >
-                        {tech.title}
+                </div>
+              );
+            }
+
+            return (
+              <div key={tech.id} className="flex items-start gap-2.5 px-3 sm:px-4 py-3">
+                <span className={`w-1.5 h-10 rounded-full shrink-0 mt-0.5 ${style.accent}`} />
+
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="text-sm font-bold text-slate-900 truncate">{tech.name}</span>
+                    <span
+                      className={`px-2 py-0.5 rounded-full border text-[11px] font-bold ${style.chip}`}
+                    >
+                      {tech.title}
+                    </span>
+                    {tech.constructionTypes.length > 0 ? (
+                      tech.constructionTypes.map((type) => (
+                        <span
+                          key={type}
+                          className={`px-1.5 py-0.5 rounded border text-[11px] font-bold ${typeStyle(type).chip}`}
+                        >
+                          {type}
+                        </span>
+                      ))
+                    ) : (
+                      <span className="px-1.5 py-0.5 rounded border border-slate-200 bg-slate-50 text-[11px] font-semibold text-slate-500">
+                        업체 미지정
                       </span>
-                    </div>
-                    {tech.createdAt && (
-                      <p className="text-[11px] text-slate-400 mt-0.5">
-                        등록 {new Date(tech.createdAt).toLocaleDateString('ko-KR')}
-                        {tech.createdBy && ` · ${tech.createdBy}`}
-                      </p>
                     )}
                   </div>
-                )}
+
+                  {(tech.phone || tech.region) && (
+                    <div className="flex items-center gap-3 mt-1 text-[11px] text-slate-600">
+                      {tech.phone && (
+                        <span className="inline-flex items-center gap-1">
+                          <Phone className="w-3 h-3 text-slate-400" />
+                          {tech.phone}
+                        </span>
+                      )}
+                      {tech.region && (
+                        <span className="inline-flex items-center gap-1 truncate">
+                          <MapPin className="w-3 h-3 text-slate-400 shrink-0" />
+                          {tech.region}
+                        </span>
+                      )}
+                    </div>
+                  )}
+
+                  <p className="text-[11px] text-slate-400 mt-0.5">
+                    {tech.createdAt && `등록 ${new Date(tech.createdAt).toLocaleDateString('ko-KR')}`}
+                    {tech.createdBy && ` · ${tech.createdBy}`}
+                    {master && tech.constructionTypes.length === 0 && (
+                      <span className="text-amber-700 font-semibold">
+                        {' '}
+                        · 업체 관리자에게는 보이지 않음
+                      </span>
+                    )}
+                  </p>
+                </div>
 
                 <div className="flex items-center gap-1 shrink-0">
-                  {isEditing ? (
-                    <>
-                      <button
-                        type="button"
-                        onClick={() => void handleSaveEdit(tech.id)}
-                        disabled={isBusy}
-                        className="p-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-60"
-                        title="저장"
-                      >
-                        {isBusy ? (
-                          <Loader2 className="w-4 h-4 animate-spin" />
-                        ) : (
-                          <Check className="w-4 h-4" />
-                        )}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setEditingId(null)}
-                        className="p-2 rounded-lg border border-slate-300 text-slate-500 hover:bg-slate-50"
-                        title="취소"
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setEditingId(tech.id);
-                          setEditDraft({ name: tech.name, title: tech.title });
-                        }}
-                        className="p-2 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700"
-                        title="이름·직함 수정"
-                      >
-                        <Pencil className="w-4 h-4" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => void handleDelete(tech)}
-                        disabled={isBusy}
-                        className="p-2 rounded-lg text-slate-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-60"
-                        title={mayDelete ? '명부에서 삭제' : '삭제 요청'}
-                      >
-                        {isBusy ? (
-                          <Loader2 className="w-4 h-4 animate-spin" />
-                        ) : (
-                          <Trash2 className="w-4 h-4" />
-                        )}
-                      </button>
-                    </>
-                  )}
+                  <button
+                    type="button"
+                    onClick={() => startEdit(tech)}
+                    className="p-2 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                    title="정보 수정"
+                  >
+                    <Pencil className="w-4 h-4" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleDelete(tech)}
+                    disabled={isBusy}
+                    className="p-2 rounded-lg text-slate-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-60"
+                    title={mayDelete ? '명부에서 삭제' : '삭제 요청'}
+                  >
+                    {isBusy ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Trash2 className="w-4 h-4" />
+                    )}
+                  </button>
                 </div>
               </div>
             );
@@ -321,6 +398,7 @@ export const TechnicianManager: React.FC<TechnicianManagerProps> = ({ session })
       <p className="mt-4 text-[11px] text-slate-500 leading-relaxed">
         이름이나 직함을 수정해도 <strong>이미 제출된 자료의 기록은 그대로 유지</strong>됩니다. 과거
         자료는 제출 당시의 이름과 직함을 그대로 보관합니다.
+        {master && ' 업체를 지정하지 않은 기사는 마스터에게만 보입니다.'}
       </p>
 
       {deleteRequest && (
@@ -337,29 +415,122 @@ export const TechnicianManager: React.FC<TechnicianManagerProps> = ({ session })
 
 /* ------------------------------------------------------------------ */
 
-const TitlePicker: React.FC<{
-  value: TechnicianTitle;
-  onChange: (title: TechnicianTitle) => void;
-  compact?: boolean;
-}> = ({ value, onChange, compact }) => (
-  <div className="flex gap-1.5">
-    {TECHNICIAN_TITLES.map((title) => {
-      const style = titleStyle(title);
-      const selected = value === title;
-      return (
-        <button
-          key={title}
-          type="button"
-          onClick={() => onChange(title)}
-          className={`flex-1 rounded-lg border-2 font-bold transition-colors ${
-            compact ? 'px-2 py-1.5 text-[11px]' : 'px-3 py-2.5 text-sm'
-          } ${selected ? `${style.selected} ${style.chip.split(' ')[1]}` : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'}`}
-        >
-          {title}
-        </button>
-      );
-    })}
-  </div>
+/** Shared by the add form and the inline editor so both stay in step. */
+const TechnicianFields: React.FC<{
+  draft: Draft;
+  onChange: (draft: Draft) => void;
+  assignableTypes: string[];
+  master: boolean;
+}> = ({ draft, onChange, assignableTypes, master }) => (
+  <>
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+      <div>
+        <label className="block text-xs font-bold text-slate-700 mb-1.5">
+          이름 <span className="text-rose-500">*</span>
+        </label>
+        <input
+          type="text"
+          value={draft.name}
+          onChange={(e) => onChange({ ...draft, name: e.target.value })}
+          placeholder="예: 홍길동"
+          maxLength={20}
+          required
+          className="w-full px-3 py-2.5 rounded-lg border border-slate-300 text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+        />
+      </div>
+      <div>
+        <label className="block text-xs font-bold text-slate-700 mb-1.5">
+          직함 <span className="text-rose-500">*</span>
+        </label>
+        <div className="flex gap-1.5">
+          {TECHNICIAN_TITLES.map((title) => {
+            const style = titleStyle(title);
+            const selected = draft.title === title;
+            return (
+              <button
+                key={title}
+                type="button"
+                onClick={() => onChange({ ...draft, title })}
+                className={`flex-1 px-2 py-2.5 rounded-lg border-2 text-xs font-bold transition-colors ${
+                  selected ? style.selected : 'border-slate-200 bg-white text-slate-600'
+                }`}
+              >
+                {title}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <label className="block text-xs font-bold text-slate-700 mb-1.5">
+        소속 업체
+        <span className="ml-1.5 font-normal text-slate-400">
+          (선택 · 여러 개 가능{master ? ' · 미지정 시 마스터만 조회' : ''})
+        </span>
+      </label>
+      {assignableTypes.length === 0 ? (
+        <p className="text-[11px] text-slate-400">지정할 수 있는 업체가 없습니다.</p>
+      ) : (
+        <div className="flex flex-wrap gap-1.5">
+          {assignableTypes.map((type) => {
+            const selected = draft.constructionTypes.includes(type);
+            const style = typeStyle(type);
+            return (
+              <button
+                key={type}
+                type="button"
+                onClick={() =>
+                  onChange({
+                    ...draft,
+                    constructionTypes: selected
+                      ? draft.constructionTypes.filter((value) => value !== type)
+                      : [...draft.constructionTypes, type],
+                  })
+                }
+                className={`px-2.5 py-1.5 rounded-lg border-2 text-xs font-bold transition-colors ${
+                  selected ? style.selected : 'border-slate-200 bg-white text-slate-600'
+                }`}
+              >
+                {type}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+      <div>
+        <label className="block text-xs font-bold text-slate-700 mb-1.5">
+          연락처 <span className="font-normal text-slate-400">(선택)</span>
+        </label>
+        <input
+          type="tel"
+          value={draft.phone}
+          onChange={(e) => onChange({ ...draft, phone: e.target.value })}
+          placeholder="예: 010-1234-5678"
+          maxLength={20}
+          inputMode="tel"
+          className="w-full px-3 py-2.5 rounded-lg border border-slate-300 text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+        />
+      </div>
+      <div>
+        <label className="block text-xs font-bold text-slate-700 mb-1.5">
+          담당지역 <span className="font-normal text-slate-400">(선택)</span>
+        </label>
+        <input
+          type="text"
+          value={draft.region}
+          onChange={(e) => onChange({ ...draft, region: e.target.value })}
+          placeholder="예: 경기 남부"
+          maxLength={40}
+          className="w-full px-3 py-2.5 rounded-lg border border-slate-300 text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+        />
+      </div>
+    </div>
+  </>
 );
 
 const Banner: React.FC<{
@@ -398,6 +569,7 @@ const DeleteRequestDialog: React.FC<{
     '',
     `· 이름: ${technician.name}`,
     `· 직함: ${technician.title}`,
+    `· 소속 업체: ${technician.constructionTypes.join(', ') || '미지정'}`,
     `· 요청자: ${requesterName}`,
     `· 요청일: ${new Date().toLocaleDateString('ko-KR')}`,
     '',
@@ -428,7 +600,8 @@ const DeleteRequestDialog: React.FC<{
 
         <div className="rounded-xl bg-slate-50 border border-slate-200 p-3 mb-4 text-xs">
           <p className="font-bold text-slate-800">
-            {technician.name} <span className="font-semibold text-slate-500">({technician.title})</span>
+            {technician.name}{' '}
+            <span className="font-semibold text-slate-500">({technician.title})</span>
           </p>
           {email ? (
             <p className="text-slate-600 mt-1.5">

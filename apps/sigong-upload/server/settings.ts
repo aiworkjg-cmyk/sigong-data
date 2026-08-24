@@ -12,6 +12,8 @@ const DELETE_REQUEST_EMAIL_KEY = 'deleteRequestEmail';
 /** Roster names are shown on a phone, so keep them short. */
 const MAX_TECHNICIAN_NAME = 20;
 const MAX_TECHNICIANS = 500;
+const MAX_PHONE = 20;
+const MAX_REGION = 40;
 
 /** A 시공종류 becomes a folder name, so it lives under SharePoint's name rules. */
 const MAX_TYPE_LENGTH = 30;
@@ -138,6 +140,9 @@ export class SettingsService {
   async addTechnician(input: {
     name: string;
     title: string;
+    constructionTypes?: string[];
+    phone?: string;
+    region?: string;
     createdBy: string;
   }): Promise<Technician> {
     const name = normalizeName(input.name);
@@ -160,6 +165,11 @@ export class SettingsService {
       id: `tech-${crypto.randomBytes(6).toString('hex')}`,
       name,
       title,
+      // Only 시공종류 that actually exist; a stale tag would hide the person
+      // from everyone without any visible reason.
+      constructionTypes: this.filterKnownTypes(input.constructionTypes),
+      phone: normalizeContact(input.phone, MAX_PHONE),
+      region: normalizeContact(input.region, MAX_REGION),
       createdAt: new Date().toISOString(),
       createdBy: input.createdBy,
     };
@@ -169,10 +179,16 @@ export class SettingsService {
     return technician;
   }
 
-  /** Renames or re-ranks someone. Past submissions keep their own snapshot. */
+  /** Edits a roster entry. Past submissions keep their own name/title snapshot. */
   async updateTechnician(
     id: string,
-    patch: { name?: string; title?: string }
+    patch: {
+      name?: string;
+      title?: string;
+      constructionTypes?: string[];
+      phone?: string;
+      region?: string;
+    }
   ): Promise<Technician> {
     const existing = this.findTechnician(id);
     if (!existing) throw new SettingsError('등록되지 않은 시공기사입니다.', 404);
@@ -193,10 +209,48 @@ export class SettingsService {
       throw new SettingsError(`이미 등록된 기사입니다. (${name} ${title})`, 409);
     }
 
-    const updated: Technician = { ...existing, name, title };
+    const updated: Technician = {
+      ...existing,
+      name,
+      title,
+      constructionTypes:
+        patch.constructionTypes === undefined
+          ? existing.constructionTypes
+          : this.filterKnownTypes(patch.constructionTypes),
+      phone: patch.phone === undefined ? existing.phone : normalizeContact(patch.phone, MAX_PHONE),
+      region:
+        patch.region === undefined ? existing.region : normalizeContact(patch.region, MAX_REGION),
+    };
     this.technicianList = this.technicianList.map((tech) => (tech.id === id ? updated : tech));
     await this.persistTechnicians();
     return updated;
+  }
+
+  /**
+   * The roster as one account may see it.
+   *
+   * A 업체 관리자 sees only the people carrying their own 업체 — including an
+   * entry tagged with several, of which one is theirs. Untagged entries are
+   * master-only on purpose: leaving 업체 blank means "not this company's".
+   */
+  visibleTechnicians(scope: { all: boolean; constructionTypes: string[] }): Technician[] {
+    if (scope.all) return this.technicians();
+
+    return this.technicians().filter((tech) =>
+      tech.constructionTypes.some((type) => scope.constructionTypes.includes(type))
+    );
+  }
+
+  /** Drops 시공종류 that are not (or no longer) configured. */
+  private filterKnownTypes(values: unknown): string[] {
+    if (!Array.isArray(values)) return [];
+    const known = new Set(this.constructionTypeList);
+    const seen = new Set<string>();
+
+    for (const value of values) {
+      if (typeof value === 'string' && known.has(value.trim())) seen.add(value.trim());
+    }
+    return [...seen];
   }
 
   async removeTechnician(id: string): Promise<void> {
@@ -243,6 +297,13 @@ export class SettingsService {
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+/** Optional free text — blank collapses to undefined rather than "". */
+function normalizeContact(value: unknown, maxLength: number): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const cleaned = value.replace(/\s+/g, ' ').trim().slice(0, maxLength);
+  return cleaned || undefined;
+}
+
 function normalizeName(value: unknown): string {
   return typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : '';
 }
@@ -264,6 +325,13 @@ function parseTechnicians(raw: string | null): Technician[] {
         id: entry.id,
         name: entry.name,
         title: readTitle(entry.title) || '부사수',
+        // Entries written before 업체 tagging existed carry none, which means
+        // master-only until somebody assigns them.
+        constructionTypes: Array.isArray(entry.constructionTypes)
+          ? entry.constructionTypes.filter((value: unknown) => typeof value === 'string')
+          : [],
+        phone: entry.phone || undefined,
+        region: entry.region || undefined,
         createdAt: entry.createdAt || '',
         createdBy: entry.createdBy || '',
       }));

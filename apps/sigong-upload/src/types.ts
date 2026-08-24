@@ -18,6 +18,19 @@ export interface Technician {
   id: string;
   name: string;
   title: TechnicianTitle;
+  /**
+   * 소속 업체 (시공종류). Optional and repeatable: a 업체 관계자 who also does
+   * installs is tagged with their own 업체, while a freelancer shared across
+   * brands can be left untagged.
+   *
+   * This is also the visibility boundary — a 업체 관리자 only ever sees the
+   * roster entries carrying their own 업체.
+   */
+  constructionTypes: string[];
+  /** 연락처 — optional. */
+  phone?: string;
+  /** 담당지역 — optional. */
+  region?: string;
   createdAt: string;
   createdBy: string;
 }

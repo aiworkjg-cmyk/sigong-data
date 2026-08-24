@@ -174,15 +174,35 @@ export const adminApi = {
   /* 시공기사 명부 */
 
   technicians: () =>
-    request<{ technicians: Technician[]; deleteRequestEmail: string }>('/api/admin/technicians'),
+    request<{
+      technicians: Technician[];
+      /** 업체 this account may tag someone with — never wider than its own. */
+      assignableTypes: string[];
+      deleteRequestEmail: string;
+    }>('/api/admin/technicians'),
 
-  addTechnician: (input: { name: string; title: string }) =>
+  addTechnician: (input: {
+    name: string;
+    title: string;
+    constructionTypes?: string[];
+    phone?: string;
+    region?: string;
+  }) =>
     request<{ technician: Technician; technicians: Technician[] }>('/api/admin/technicians', {
       method: 'POST',
       body: JSON.stringify(input),
     }),
 
-  updateTechnician: (id: string, patch: { name?: string; title?: string }) =>
+  updateTechnician: (
+    id: string,
+    patch: {
+      name?: string;
+      title?: string;
+      constructionTypes?: string[];
+      phone?: string;
+      region?: string;
+    }
+  ) =>
     request<{ technician: Technician; technicians: Technician[] }>(
       `/api/admin/technicians/${encodeURIComponent(id)}`,
       { method: 'PATCH', body: JSON.stringify(patch) }

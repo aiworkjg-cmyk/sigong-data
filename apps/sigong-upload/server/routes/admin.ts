@@ -8,6 +8,7 @@ import { SettingsError } from '../settings';
 import type { AppContext } from '../context';
 import { ASSIGNABLE_ROLES } from '../../src/types';
 import type {
+  AdminSession,
   AssignableRole,
   Issue,
   SiteRecord,
@@ -198,7 +199,7 @@ export function createAdminRouter(ctx: AppContext): Router {
     const scope = scopeOf(req.admin!);
     res.json({
       constructionTypes: scope.all ? ctx.settings.constructionTypes() : scope.constructionTypes,
-      technicians: scope.technicianId ? [] : ctx.settings.technicians(),
+      technicians: scope.technicianId ? [] : ctx.settings.visibleTechnicians(scope),
       scope,
     });
   });
@@ -468,22 +469,73 @@ export function createAdminRouter(ctx: AppContext): Router {
   /* 시공기사 명부                                                      */
   /* ---------------------------------------------------------------- */
 
-  /** Readable by everyone signed in — the roster is also the filter list. */
-  router.get('/technicians', (_req, res) => {
+  /**
+   * The roster, narrowed to what this account may see.
+   *
+   * A 시공기사 gets only their own entry: they never manage the roster, and the
+   * filter list on 시공현황 is empty for them anyway.
+   */
+  const rosterFor = (admin: AdminSession) => {
+    const scope = scopeOf(admin);
+    if (scope.technicianId) {
+      const own = ctx.settings.findTechnician(scope.technicianId);
+      return own ? [own] : [];
+    }
+    return ctx.settings.visibleTechnicians(scope);
+  };
+
+  router.get('/technicians', (req, res) => {
     res.json({
-      technicians: ctx.settings.technicians(),
+      technicians: rosterFor(req.admin!),
+      // The 업체 a manager may tag someone with — never wider than their own.
+      assignableTypes: scopeOf(req.admin!).all
+        ? ctx.settings.constructionTypes()
+        : req.admin!.constructionTypes,
       deleteRequestEmail: ctx.settings.deleteRequestEmail(),
     });
   });
 
+  /**
+   * Keeps a 업체 관리자 inside its own lane.
+   *
+   * Tags outside the actor's scope are preserved untouched — a master may have
+   * put someone in two companies, and 백조 editing them must not quietly drop
+   * 한샘 — while the tags inside the scope become exactly what was requested.
+   */
+  function resolveTechnicianTypes(
+    admin: AdminSession,
+    requested: string[],
+    existing: string[]
+  ): string[] {
+    if (scopeOf(admin).all) return requested;
+
+    const own = admin.constructionTypes;
+    const untouched = existing.filter((type) => !own.includes(type));
+    const mine = requested.filter((type) => own.includes(type));
+    return [...new Set([...untouched, ...mine])];
+  }
+
   router.post('/technicians', requireManager, async (req, res) => {
     try {
+      const admin = req.admin!;
+      const requested = readStringArray(req.body?.constructionTypes);
+      // A 업체 관리자 adding nobody's-company would immediately lose sight of
+      // the person they just created, so default them to their own 업체.
+      const constructionTypes = scopeOf(admin).all
+        ? requested
+        : resolveTechnicianTypes(admin, requested, []).length > 0
+          ? resolveTechnicianTypes(admin, requested, [])
+          : admin.constructionTypes;
+
       const technician = await ctx.settings.addTechnician({
         name: cleanText(req.body?.name, 40),
         title: String(req.body?.title || ''),
-        createdBy: req.admin?.username || '',
+        constructionTypes,
+        phone: cleanText(req.body?.phone, 20),
+        region: cleanText(req.body?.region, 40),
+        createdBy: admin.username,
       });
-      res.status(201).json({ technician, technicians: ctx.settings.technicians() });
+      res.status(201).json({ technician, technicians: rosterFor(admin) });
     } catch (err) {
       handleSettingsError(err, res);
     }
@@ -491,11 +543,27 @@ export function createAdminRouter(ctx: AppContext): Router {
 
   router.patch('/technicians/:id', requireManager, async (req, res) => {
     try {
+      const admin = req.admin!;
+      const existing = ctx.settings.findTechnician(req.params.id);
+      if (!existing || !rosterFor(admin).some((tech) => tech.id === existing.id)) {
+        res.status(404).json({ error: '등록되지 않은 시공기사입니다.' });
+        return;
+      }
+
       const technician = await ctx.settings.updateTechnician(req.params.id, {
         name: typeof req.body?.name === 'string' ? cleanText(req.body.name, 40) : undefined,
         title: typeof req.body?.title === 'string' ? req.body.title : undefined,
+        constructionTypes: Array.isArray(req.body?.constructionTypes)
+          ? resolveTechnicianTypes(
+              admin,
+              readStringArray(req.body.constructionTypes),
+              existing.constructionTypes
+            )
+          : undefined,
+        phone: typeof req.body?.phone === 'string' ? cleanText(req.body.phone, 20) : undefined,
+        region: typeof req.body?.region === 'string' ? cleanText(req.body.region, 40) : undefined,
       });
-      res.json({ technician, technicians: ctx.settings.technicians() });
+      res.json({ technician, technicians: rosterFor(admin) });
     } catch (err) {
       handleSettingsError(err, res);
     }
@@ -517,7 +585,7 @@ export function createAdminRouter(ctx: AppContext): Router {
       }
 
       await ctx.settings.removeTechnician(req.params.id);
-      res.json({ technicians: ctx.settings.technicians() });
+      res.json({ technicians: rosterFor(req.admin!) });
     } catch (err) {
       handleSettingsError(err, res);
     }
