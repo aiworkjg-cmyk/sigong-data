@@ -341,7 +341,7 @@ export const AdminAccounts: React.FC<AdminAccountsProps> = ({ session }) => {
                 type="text"
                 value={draft.username}
                 onChange={(e) => setDraft({ ...draft, username: e.target.value })}
-                placeholder="영문·숫자 3~32자"
+                placeholder="예: baekjo01"
                 autoComplete="off"
                 required
                 className="w-full px-3 py-2.5 rounded-lg border border-slate-300 text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -353,7 +353,7 @@ export const AdminAccounts: React.FC<AdminAccountsProps> = ({ session }) => {
                 type="text"
                 value={draft.displayName}
                 onChange={(e) => setDraft({ ...draft, displayName: e.target.value })}
-                placeholder="예: 홍길동 / 백조 김대리"
+                placeholder="예: 홍길동"
                 className="w-full px-3 py-2.5 rounded-lg border border-slate-300 text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
             </div>

@@ -153,7 +153,7 @@ export const ConstructionTypeManager: React.FC<ConstructionTypeManagerProps> = (
             type="text"
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
-            placeholder="추가할 시공종류 (예: 리바트)"
+            placeholder="예: 한샘"
             maxLength={30}
             className="flex-1 min-w-[200px] px-3 py-2.5 rounded-lg border border-slate-300 text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
           />

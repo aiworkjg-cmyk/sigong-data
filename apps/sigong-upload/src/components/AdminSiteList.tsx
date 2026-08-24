@@ -132,7 +132,7 @@ export const AdminSiteList: React.FC<AdminSiteListProps> = ({
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="주소, 시공기사, 날짜, 현장ID 검색..."
+            placeholder="예: 광명 / 홍길동 / BAEKJO-20260824-001"
             className="w-full pl-9 pr-4 py-2 rounded-lg border border-slate-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 text-xs sm:text-sm focus:outline-hidden transition-all"
           />
         </div>

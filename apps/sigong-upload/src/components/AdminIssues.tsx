@@ -204,14 +204,14 @@ export const AdminIssues: React.FC<AdminIssuesProps> = ({
             type="text"
             value={draft.title}
             onChange={(event) => setDraft({ ...draft, title: event.target.value })}
-            placeholder="이슈 제목 (예: 2026-08-14 광명 현장 동영상 업로드 실패)"
+            placeholder="예: 광명 현장 동영상 업로드 실패"
             required
             className="w-full px-3 py-2.5 rounded-lg border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
           <textarea
             value={draft.body}
             onChange={(event) => setDraft({ ...draft, body: event.target.value })}
-            placeholder="상세 내용, 재현 방법, 담당자 연락 결과 등"
+            placeholder="예: 100MB 영상 3개가 저장 실패로 남아 있음"
             rows={4}
             className="w-full px-3 py-2.5 rounded-lg border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y"
           />
@@ -220,7 +220,7 @@ export const AdminIssues: React.FC<AdminIssuesProps> = ({
               type="text"
               value={draft.siteId}
               onChange={(event) => setDraft({ ...draft, siteId: event.target.value })}
-              placeholder="관련 현장 ID (선택)"
+              placeholder="예: BAEKJO-20260824-001"
               className="flex-1 min-w-48 px-3 py-2 rounded-lg border border-slate-300 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
             <select
@@ -376,7 +376,7 @@ export const AdminIssues: React.FC<AdminIssuesProps> = ({
                           void handleComment(issue);
                         }
                       }}
-                      placeholder="처리 내용 기록..."
+                      placeholder="예: 재동기화 완료"
                       className="flex-1 px-3 py-2 rounded-lg border border-slate-300 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
                     />
                     <button

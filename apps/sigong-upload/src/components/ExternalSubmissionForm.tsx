@@ -435,7 +435,7 @@ export const ExternalSubmissionForm: React.FC<ExternalSubmissionFormProps> = ({
                 rows={3}
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
-                placeholder="시공 특이사항, 자재 변경 내역, 추가 보수 필요 사항 등을 입력해 주세요."
+                placeholder="예: 싱크대 상판 자재를 현장에서 변경함"
                 className="w-full px-4 py-2.5 rounded-lg border border-slate-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 text-sm focus:outline-hidden transition-all"
                 disabled={isSubmitting}
               />

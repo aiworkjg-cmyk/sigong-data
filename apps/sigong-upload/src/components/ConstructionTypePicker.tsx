@@ -120,7 +120,7 @@ export const ConstructionTypePicker: React.FC<ConstructionTypePickerProps> = ({
             onFocus={() => setIsOpen(true)}
             onKeyDown={handleKeyDown}
             disabled={disabled}
-            placeholder="시공종류 검색 (ㅂ, 배, 백 → 백조)"
+            placeholder="예: 한샘"
             autoComplete="off"
             autoCapitalize="off"
             autoCorrect="off"

@@ -147,9 +147,7 @@ export const TechnicianPicker: React.FC<TechnicianPickerProps> = ({
           onFocus={() => setIsOpen(true)}
           onKeyDown={handleKeyDown}
           disabled={disabled}
-          placeholder={
-            selected.length > 0 ? '기사 추가...' : '이름 검색 (ㅎ, 호, 홍 → 홍길동)'
-          }
+          placeholder="예: 홍길동"
           // A phone keyboard should not capitalize or autocorrect a name.
           autoComplete="off"
           autoCapitalize="off"
