@@ -1,5 +1,6 @@
 import crypto from 'crypto';
-import { sanitizeSegment } from '@jg/sharepoint-core';
+import { DEFAULT_RULE, loadFolderRuleFromEnv, sanitizeSegment } from '@jg/sharepoint-core';
+import type { FolderRule } from '@jg/sharepoint-core';
 import { config } from './config';
 import type { SettingsRepository } from './repositories';
 import { TECHNICIAN_TITLES } from '../src/types';
@@ -7,7 +8,12 @@ import type { Technician, TechnicianTitle } from '../src/types';
 
 const CONSTRUCTION_TYPES_KEY = 'constructionTypes';
 const TECHNICIANS_KEY = 'technicians';
-const DELETE_REQUEST_EMAIL_KEY = 'deleteRequestEmail';
+const DELETE_REQUEST_EMAILS_KEY = 'deleteRequestEmails';
+/** Written by an earlier version that held a single address. */
+const LEGACY_DELETE_EMAIL_KEY = 'deleteRequestEmail';
+const FOLDER_RULE_KEY = 'folderRule';
+const MAX_DELETE_EMAILS = 20;
+const MAX_SEGMENTS = 8;
 
 /** Roster names are shown on a phone, so keep them short. */
 const MAX_TECHNICIAN_NAME = 20;
@@ -43,7 +49,8 @@ export class SettingsError extends Error {
 export class SettingsService {
   private constructionTypeList: string[] = [];
   private technicianList: Technician[] = [];
-  private deleteRequestEmailValue = '';
+  private deleteRequestEmailList: string[] = [];
+  private folderRuleValue: FolderRule = DEFAULT_RULE;
 
   constructor(private readonly repo: SettingsRepository) {}
 
@@ -58,7 +65,22 @@ export class SettingsService {
     }
 
     this.technicianList = parseTechnicians(await this.repo.get(TECHNICIANS_KEY));
-    this.deleteRequestEmailValue = (await this.repo.get(DELETE_REQUEST_EMAIL_KEY)) || '';
+
+    const storedEmails = parseStringList(await this.repo.get(DELETE_REQUEST_EMAILS_KEY));
+    if (storedEmails.length > 0) {
+      this.deleteRequestEmailList = storedEmails;
+    } else {
+      // Carry the single address the previous version stored, so the setting
+      // does not silently empty itself on upgrade.
+      const legacy = (await this.repo.get(LEGACY_DELETE_EMAIL_KEY))?.trim();
+      this.deleteRequestEmailList = legacy ? [legacy] : [];
+      if (legacy) await this.persistDeleteEmails();
+    }
+
+    // The environment supplies the starting rule; once edited on screen, the
+    // stored rule wins so a redeploy cannot revert a deliberate change.
+    this.folderRuleValue = parseFolderRule(await this.repo.get(FOLDER_RULE_KEY))
+      ?? loadFolderRuleFromEnv();
   }
 
   constructionTypes(): string[] {
@@ -267,21 +289,122 @@ export class SettingsService {
   /* 삭제 요청 수신 메일                                                */
   /* ---------------------------------------------------------------- */
 
-  /** Where 업체 관리자 are told to write when they need a roster deletion. */
-  deleteRequestEmail(): string {
-    return this.deleteRequestEmailValue;
+  /**
+   * Everyone who should receive a roster-deletion request.
+   *
+   * A list rather than one address: the person who can act on a request is not
+   * always the person who configured the app, and a single address turns into a
+   * silent dead end the moment that one mailbox stops being read.
+   */
+  deleteRequestEmails(): string[] {
+    return [...this.deleteRequestEmailList];
   }
 
-  async setDeleteRequestEmail(value: string): Promise<string> {
-    const email = (value || '').trim();
-    // Empty is allowed: the popup then just says to contact the master.
-    if (email && !EMAIL_PATTERN.test(email)) {
+  async addDeleteRequestEmail(value: string): Promise<string[]> {
+    const email = normalizeEmail(value);
+    if (!email) throw new SettingsError('이메일 주소를 입력해 주세요.');
+    if (!EMAIL_PATTERN.test(email)) {
       throw new SettingsError('올바른 이메일 주소를 입력해 주세요.');
     }
+    if (this.deleteRequestEmailList.some((entry) => entry.toLowerCase() === email.toLowerCase())) {
+      throw new SettingsError('이미 등록된 주소입니다.', 409);
+    }
+    if (this.deleteRequestEmailList.length >= MAX_DELETE_EMAILS) {
+      throw new SettingsError(`수신 주소는 최대 ${MAX_DELETE_EMAILS}개까지 등록할 수 있습니다.`);
+    }
 
-    this.deleteRequestEmailValue = email;
-    await this.repo.set(DELETE_REQUEST_EMAIL_KEY, email);
-    return email;
+    this.deleteRequestEmailList = [...this.deleteRequestEmailList, email];
+    await this.persistDeleteEmails();
+    return this.deleteRequestEmails();
+  }
+
+  async updateDeleteRequestEmail(current: string, next: string): Promise<string[]> {
+    const from = normalizeEmail(current);
+    const to = normalizeEmail(next);
+
+    if (!EMAIL_PATTERN.test(to)) {
+      throw new SettingsError('올바른 이메일 주소를 입력해 주세요.');
+    }
+    const index = this.deleteRequestEmailList.findIndex(
+      (entry) => entry.toLowerCase() === from.toLowerCase()
+    );
+    if (index < 0) throw new SettingsError('등록되지 않은 주소입니다.', 404);
+
+    if (
+      this.deleteRequestEmailList.some(
+        (entry, position) => position !== index && entry.toLowerCase() === to.toLowerCase()
+      )
+    ) {
+      throw new SettingsError('이미 등록된 주소입니다.', 409);
+    }
+
+    this.deleteRequestEmailList = this.deleteRequestEmailList.map((entry, position) =>
+      position === index ? to : entry
+    );
+    await this.persistDeleteEmails();
+    return this.deleteRequestEmails();
+  }
+
+  async removeDeleteRequestEmail(value: string): Promise<string[]> {
+    const email = normalizeEmail(value);
+    const remaining = this.deleteRequestEmailList.filter(
+      (entry) => entry.toLowerCase() !== email.toLowerCase()
+    );
+    if (remaining.length === this.deleteRequestEmailList.length) {
+      throw new SettingsError('등록되지 않은 주소입니다.', 404);
+    }
+
+    this.deleteRequestEmailList = remaining;
+    await this.persistDeleteEmails();
+    return this.deleteRequestEmails();
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* 폴더 생성 규칙                                                     */
+  /* ---------------------------------------------------------------- */
+
+  folderRule(): FolderRule {
+    return { ...this.folderRuleValue, segments: [...this.folderRuleValue.segments] };
+  }
+
+  async setFolderRule(input: { root: string; segments: string[] }): Promise<FolderRule> {
+    // The root is a path, not one name: targeting a Teams channel means
+    // "채널이름/시공현장자료". Each level is tidied separately so the slashes
+    // survive while the names themselves stay clean.
+    const root = (typeof input.root === 'string' ? input.root : '')
+      .split('/')
+      .map(normalizeSegment)
+      .filter(Boolean)
+      .join('/');
+    if (!root) throw new SettingsError('최상위 폴더 이름을 입력해 주세요.');
+
+    const segments = (Array.isArray(input.segments) ? input.segments : [])
+      .map(normalizeSegment)
+      .filter(Boolean);
+
+    if (segments.length === 0) {
+      throw new SettingsError('폴더 단계를 1개 이상 지정해 주세요.');
+    }
+    if (segments.length > MAX_SEGMENTS) {
+      throw new SettingsError(`폴더 단계는 최대 ${MAX_SEGMENTS}단계까지 지정할 수 있습니다.`);
+    }
+
+    // The root may span levels (see above), so a slash is allowed there and
+    // creates the folders in turn. A slash inside a *segment* would silently
+    // add a level the admin did not intend, so the depth below the root stays
+    // exactly what the list says.
+    if (/[\\:*?"<>|]/.test(root)) {
+      throw new SettingsError('최상위 폴더에는 \\ : * ? " < > | 문자를 사용할 수 없습니다.');
+    }
+    for (const segment of segments) {
+      if (/[\\/:*?"<>|]/.test(segment)) {
+        throw new SettingsError('폴더 단계에는 \\ / : * ? " < > | 문자를 사용할 수 없습니다.');
+      }
+    }
+
+    this.folderRuleValue = { ...this.folderRuleValue, root, segments };
+    await this.repo.set(FOLDER_RULE_KEY, JSON.stringify({ root, segments }));
+    return this.folderRule();
   }
 
   /* ---------------------------------------------------------------- */
@@ -293,6 +416,10 @@ export class SettingsService {
   private async persistTechnicians(): Promise<void> {
     await this.repo.set(TECHNICIANS_KEY, JSON.stringify(this.technicianList));
   }
+
+  private async persistDeleteEmails(): Promise<void> {
+    await this.repo.set(DELETE_REQUEST_EMAILS_KEY, JSON.stringify(this.deleteRequestEmailList));
+  }
 }
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -302,6 +429,42 @@ function normalizeContact(value: unknown, maxLength: number): string | undefined
   if (typeof value !== 'string') return undefined;
   const cleaned = value.replace(/\s+/g, ' ').trim().slice(0, maxLength);
   return cleaned || undefined;
+}
+
+function normalizeEmail(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function normalizeSegment(value: unknown): string {
+  return typeof value === 'string' ? value.replace(/\s+/g, ' ').trim().slice(0, 60) : '';
+}
+
+function parseStringList(raw: string | null): string[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((entry): entry is string => typeof entry === 'string' && entry.trim() !== '');
+  } catch {
+    return [];
+  }
+}
+
+/** Returns null when nothing usable is stored, so the caller can fall back. */
+function parseFolderRule(raw: string | null): FolderRule | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    const segments = Array.isArray(parsed?.segments)
+      ? parsed.segments.filter((entry: unknown): entry is string => typeof entry === 'string')
+      : [];
+    if (typeof parsed?.root !== 'string' || !parsed.root || segments.length === 0) return null;
+
+    // Only the two editable fields are stored; the rest stay as configured.
+    return { ...loadFolderRuleFromEnv(), root: parsed.root, segments };
+  } catch {
+    return null;
+  }
 }
 
 function normalizeName(value: unknown): string {

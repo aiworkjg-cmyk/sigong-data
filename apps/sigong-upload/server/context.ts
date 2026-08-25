@@ -47,6 +47,9 @@ export async function createContext(): Promise<AppContext> {
 
   const siteIds = new SiteIdFactory(repos.settings);
   await siteIds.load();
+
+  // A rule edited on screen outlives the environment it was first read from.
+  sharePoint.rule = settings.folderRule();
   if (settings.constructionTypes().length === 0) {
     warnings.push('시공종류가 하나도 없습니다. 관리자 화면 > 설정에서 추가해야 자료 제출이 가능합니다.');
   }

@@ -53,7 +53,7 @@ const EMPTY_DRAFT: Draft = {
 export const TechnicianManager: React.FC<TechnicianManagerProps> = ({ session }) => {
   const [technicians, setTechnicians] = useState<Technician[]>([]);
   const [assignableTypes, setAssignableTypes] = useState<string[]>([]);
-  const [deleteRequestEmail, setDeleteRequestEmail] = useState('');
+  const [deleteRequestEmails, setDeleteRequestEmails] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -75,7 +75,7 @@ export const TechnicianManager: React.FC<TechnicianManagerProps> = ({ session })
       const result = await adminApi.technicians();
       setTechnicians(result.technicians);
       setAssignableTypes(result.assignableTypes);
-      setDeleteRequestEmail(result.deleteRequestEmail);
+      setDeleteRequestEmails(result.deleteRequestEmails);
     } catch (err: any) {
       setError(err?.message || '시공기사 명부를 불러오지 못했습니다.');
     } finally {
@@ -404,7 +404,7 @@ export const TechnicianManager: React.FC<TechnicianManagerProps> = ({ session })
       {deleteRequest && (
         <DeleteRequestDialog
           technician={deleteRequest}
-          email={deleteRequestEmail}
+          emails={deleteRequestEmails}
           requesterName={session.displayName}
           onClose={() => setDeleteRequest(null)}
         />
@@ -559,10 +559,10 @@ const Banner: React.FC<{
  */
 const DeleteRequestDialog: React.FC<{
   technician: Technician;
-  email: string;
+  emails: string[];
   requesterName: string;
   onClose: () => void;
-}> = ({ technician, email, requesterName, onClose }) => {
+}> = ({ technician, emails, requesterName, onClose }) => {
   const subject = `[시공기사 삭제 요청] ${technician.name} (${technician.title})`;
   const body = [
     '아래 시공기사를 명부에서 삭제 요청합니다.',
@@ -603,13 +603,20 @@ const DeleteRequestDialog: React.FC<{
             {technician.name}{' '}
             <span className="font-semibold text-slate-500">({technician.title})</span>
           </p>
-          {email ? (
-            <p className="text-slate-600 mt-1.5">
-              아래 주소로 요청해 주세요:{' '}
-              <a href={`mailto:${email}`} className="font-bold text-blue-700 underline">
-                {email}
-              </a>
-            </p>
+          {emails.length > 0 ? (
+            <>
+              <p className="text-slate-600 mt-1.5 mb-1">
+                아래 {emails.length}명 모두에게 요청 메일이 전송됩니다:
+              </p>
+              <ul className="space-y-0.5">
+                {emails.map((address) => (
+                  <li key={address} className="flex items-center gap-1.5">
+                    <Mail className="w-3 h-3 text-slate-400 shrink-0" />
+                    <span className="font-semibold text-slate-700 truncate">{address}</span>
+                  </li>
+                ))}
+              </ul>
+            </>
           ) : (
             <p className="text-slate-600 mt-1.5">
               수신 메일 주소가 아직 설정되지 않았습니다. 마스터관리자에게 직접 문의해 주세요.
@@ -618,13 +625,13 @@ const DeleteRequestDialog: React.FC<{
         </div>
 
         <div className="flex gap-2">
-          {email && (
+          {emails.length > 0 && (
             <a
-              href={`mailto:${email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`}
+              href={`mailto:${emails.join(',')}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`}
               className="flex-1 inline-flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold"
             >
               <Mail className="w-3.5 h-3.5" />
-              메일 작성
+              메일 작성 ({emails.length}명)
             </a>
           )}
           <button

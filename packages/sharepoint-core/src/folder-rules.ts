@@ -7,6 +7,8 @@
  * setting the SHAREPOINT_FOLDER_* env vars — no upload code changes.
  */
 
+import { parseAddress } from './address';
+
 export interface FolderRule {
   /** Top-level library folder every site lands under. */
   root: string;
@@ -21,14 +23,18 @@ export interface FolderRule {
 }
 
 /**
- * 시공현장자료 / 백조 / 2026 / 08월 / 0811_경기광명시하안로60광명SK테크노파크
+ * 시공현장자료 / 백조 / 2026 / 08월 / 0824_경기도광명시_이편한세상
+ *
+ * The site folder is 날짜_지역_건물, not the raw address: the unit number is
+ * dropped so every household in one building shares a folder, and the region
+ * stops at 시군구 so folders stay readable at a glance.
  *
  * Attachments land directly in the dated site folder; there is no extra
  * subfolder level below it.
  */
 export const DEFAULT_RULE: FolderRule = {
   root: '시공현장자료',
-  segments: ['{type}', '{yyyy}', '{MM}월', '{MMdd}_{addressCompact}'],
+  segments: ['{type}', '{yyyy}', '{MM}월', '{MMdd}_{region}_{building}'],
   attachmentsFolder: null,
   metadataFileName: '현장정보.json',
   maxSegmentLength: 60,
@@ -93,10 +99,7 @@ export function sanitizeFileName(name: string, maxLength = 120): string {
  * Splits a Korean address into its administrative head parts so rules can file
  * by region. "경기 광명시 하안로 60" -> sido "경기", sigungu "광명시".
  */
-function splitAddress(address: string): { sido: string; sigungu: string } {
-  const parts = (address || '').trim().split(/\s+/).filter(Boolean);
-  return { sido: parts[0] || '미지정', sigungu: parts[1] || '미지정' };
-}
+
 
 /**
  * Builds the token table a segment template can reference. Every value is
@@ -109,7 +112,7 @@ function buildTokens(ctx: FolderContext, maxLength: number): Record<string, stri
     : new Date(ctx.submittedAt || Date.now()).toISOString().slice(0, 10);
 
   const [yyyy, MM, dd] = date.split('-');
-  const { sido, sigungu } = splitAddress(ctx.address);
+  const { sido, sigungu, region, building } = parseAddress(ctx.address);
   const submitted = new Date(ctx.submittedAt || Date.now());
 
   const raw: Record<string, string> = {
@@ -126,6 +129,10 @@ function buildTokens(ctx: FolderContext, maxLength: number): Record<string, stri
     addressCompact: (ctx.address || '').replace(/\s+/g, ''),
     sido,
     sigungu,
+    // 시도+시군구, e.g. 경기도광명시
+    region,
+    // 아파트·건물 이름. 동호수와 상세주소는 제외됩니다.
+    building,
     manager: ctx.managerName,
     siteId: ctx.siteId,
     submittedDate: submitted.toISOString().slice(0, 10),
@@ -133,7 +140,11 @@ function buildTokens(ctx: FolderContext, maxLength: number): Record<string, stri
 
   const tokens: Record<string, string> = {};
   for (const [key, value] of Object.entries(raw)) {
-    tokens[key] = sanitizeSegment(value, maxLength);
+    // An absent value stays empty so the template can drop it along with its
+    // separators. sanitizeSegment's "미지정" fallback is for a whole segment
+    // that came out blank, not for one missing piece of it — an address with
+    // no building name should yield "0824_경기도광명시", not "…_미지정".
+    tokens[key] = value ? sanitizeSegment(value, maxLength) : '';
   }
   return tokens;
 }
@@ -147,10 +158,21 @@ export function resolveFolder(ctx: FolderContext, rule: FolderRule = DEFAULT_RUL
       // Unknown tokens collapse to empty rather than leaking a literal "{foo}".
       template.replace(/\{(\w[\w-]*)\}/g, (_match, key: string) => tokens[key] ?? '')
     )
+    // An empty token would otherwise leave its separators behind
+    // ("0824_경기도광명시_" when the address carries no building name).
+    .map((segment) => segment.replace(/[_-]{2,}/g, '_').replace(/^[_-]+|[_-]+$/g, ''))
     .map((segment) => sanitizeSegment(segment, rule.maxSegmentLength))
     .filter((segment) => segment && segment !== '미지정');
 
-  const rootFolder = sanitizeSegment(rule.root, rule.maxSegmentLength);
+  // The root may name several levels — "채널이름/시공현장자료" when the target is
+  // a Teams channel — so each level is sanitized on its own and the separators
+  // survive. Sanitizing the whole string would turn the slashes into "_" and
+  // silently flatten the intended depth into one oddly named folder.
+  const rootFolder = rule.root
+    .split('/')
+    .map((part) => sanitizeSegment(part, rule.maxSegmentLength))
+    .filter(Boolean)
+    .join('/');
   const fullFolderPath = [rootFolder, ...segments].join('/');
   const attachmentsFolderPath = rule.attachmentsFolder
     ? `${fullFolderPath}/${sanitizeSegment(rule.attachmentsFolder, rule.maxSegmentLength)}`

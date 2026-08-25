@@ -45,6 +45,27 @@ function readStringArray(value: unknown): string[] {
 
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
+/** Shown beside the folder-rule editor so the admin need not guess key names. */
+const AVAILABLE_TOKENS: { token: string; label: string; sample: string }[] = [
+  { token: '{type}', label: '시공종류', sample: '백조' },
+  { token: '{region}', label: '지역 (시도+시군구)', sample: '경기도광명시' },
+  { token: '{building}', label: '건물·아파트명', sample: '이편한세상' },
+  { token: '{yyyy}', label: '연도', sample: '2026' },
+  { token: '{MM}', label: '월', sample: '08' },
+  { token: '{dd}', label: '일', sample: '24' },
+  { token: '{MMdd}', label: '월일', sample: '0824' },
+  { token: '{date}', label: '시공일', sample: '2026-08-24' },
+  { token: '{yyyy-MM}', label: '연-월', sample: '2026-08' },
+  { token: '{quarter}', label: '분기', sample: 'Q3' },
+  { token: '{sido}', label: '시도', sample: '경기도' },
+  { token: '{sigungu}', label: '시군구', sample: '광명시' },
+  { token: '{address}', label: '입력한 주소 전체', sample: '경기도 광명시 …' },
+  { token: '{addressCompact}', label: '주소(공백 제거)', sample: '경기도광명시…' },
+  { token: '{siteId}', label: '현장 ID', sample: 'BAEKJO-20260824-001' },
+  { token: '{manager}', label: '시공기사', sample: '홍길동(팀장)' },
+  { token: '{submittedDate}', label: '제출일', sample: '2026-08-24' },
+];
+
 function readDate(value: unknown): string | undefined {
   return typeof value === 'string' && DATE_PATTERN.test(value) ? value : undefined;
 }
@@ -491,7 +512,7 @@ export function createAdminRouter(ctx: AppContext): Router {
       assignableTypes: scopeOf(req.admin!).all
         ? ctx.settings.constructionTypes()
         : req.admin!.constructionTypes,
-      deleteRequestEmail: ctx.settings.deleteRequestEmail(),
+      deleteRequestEmails: ctx.settings.deleteRequestEmails(),
     });
   });
 
@@ -595,10 +616,72 @@ export function createAdminRouter(ctx: AppContext): Router {
   /* 삭제 요청 수신 메일 (master only)                                   */
   /* ---------------------------------------------------------------- */
 
-  router.put('/settings/delete-request-email', requireMaster, async (req, res) => {
+  router.get('/settings/delete-request-emails', requireMaster, (_req, res) => {
+    res.json({ deleteRequestEmails: ctx.settings.deleteRequestEmails() });
+  });
+
+  router.post('/settings/delete-request-emails', requireMaster, async (req, res) => {
     try {
-      const email = await ctx.settings.setDeleteRequestEmail(String(req.body?.email ?? ''));
-      res.json({ deleteRequestEmail: email });
+      const deleteRequestEmails = await ctx.settings.addDeleteRequestEmail(
+        String(req.body?.email ?? '')
+      );
+      res.status(201).json({ deleteRequestEmails });
+    } catch (err) {
+      handleSettingsError(err, res);
+    }
+  });
+
+  router.patch('/settings/delete-request-emails/:email', requireMaster, async (req, res) => {
+    try {
+      const deleteRequestEmails = await ctx.settings.updateDeleteRequestEmail(
+        req.params.email,
+        String(req.body?.email ?? '')
+      );
+      res.json({ deleteRequestEmails });
+    } catch (err) {
+      handleSettingsError(err, res);
+    }
+  });
+
+  router.delete('/settings/delete-request-emails/:email', requireMaster, async (req, res) => {
+    try {
+      const deleteRequestEmails = await ctx.settings.removeDeleteRequestEmail(req.params.email);
+      res.json({ deleteRequestEmails });
+    } catch (err) {
+      handleSettingsError(err, res);
+    }
+  });
+
+  /* ---------------------------------------------------------------- */
+  /* 폴더 생성 규칙 (master only)                                       */
+  /* ---------------------------------------------------------------- */
+
+  router.get('/settings/folder-rule', requireMaster, (_req, res) => {
+    const rule = ctx.settings.folderRule();
+    res.json({
+      folderRule: { root: rule.root, segments: rule.segments },
+      // Rendered from a fixed sample so the admin sees the shape of the result
+      // before saving, not after the next submission lands in the wrong place.
+      example: ctx.sharePoint.getConfigStatus().examplePath,
+      availableTokens: AVAILABLE_TOKENS,
+    });
+  });
+
+  router.put('/settings/folder-rule', requireMaster, async (req, res) => {
+    try {
+      const folderRule = await ctx.settings.setFolderRule({
+        root: String(req.body?.root ?? ''),
+        segments: readStringArray(req.body?.segments),
+      });
+
+      // The service resolves paths from its own copy, so hand it the new rule
+      // immediately — otherwise the change would only apply after a restart.
+      ctx.sharePoint.rule = folderRule;
+
+      res.json({
+        folderRule: { root: folderRule.root, segments: folderRule.segments },
+        example: ctx.sharePoint.getConfigStatus().examplePath,
+      });
     } catch (err) {
       handleSettingsError(err, res);
     }

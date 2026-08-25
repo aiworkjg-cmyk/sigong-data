@@ -178,7 +178,7 @@ export const adminApi = {
       technicians: Technician[];
       /** 업체 this account may tag someone with — never wider than its own. */
       assignableTypes: string[];
-      deleteRequestEmail: string;
+      deleteRequestEmails: string[];
     }>('/api/admin/technicians'),
 
   addTechnician: (input: {
@@ -214,11 +214,43 @@ export const adminApi = {
       method: 'DELETE',
     }),
 
-  setDeleteRequestEmail: (email: string) =>
-    request<{ deleteRequestEmail: string }>('/api/admin/settings/delete-request-email', {
-      method: 'PUT',
+  /* 삭제 요청 수신 메일 — 여러 개 등록, 전원에게 발송 */
+
+  deleteRequestEmails: () =>
+    request<{ deleteRequestEmails: string[] }>('/api/admin/settings/delete-request-emails'),
+
+  addDeleteRequestEmail: (email: string) =>
+    request<{ deleteRequestEmails: string[] }>('/api/admin/settings/delete-request-emails', {
+      method: 'POST',
       body: JSON.stringify({ email }),
     }),
+
+  updateDeleteRequestEmail: (current: string, email: string) =>
+    request<{ deleteRequestEmails: string[] }>(
+      `/api/admin/settings/delete-request-emails/${encodeURIComponent(current)}`,
+      { method: 'PATCH', body: JSON.stringify({ email }) }
+    ),
+
+  removeDeleteRequestEmail: (email: string) =>
+    request<{ deleteRequestEmails: string[] }>(
+      `/api/admin/settings/delete-request-emails/${encodeURIComponent(email)}`,
+      { method: 'DELETE' }
+    ),
+
+  /* 폴더 생성 규칙 */
+
+  folderRule: () =>
+    request<{
+      folderRule: { root: string; segments: string[] };
+      example: string;
+      availableTokens: { token: string; label: string; sample: string }[];
+    }>('/api/admin/settings/folder-rule'),
+
+  setFolderRule: (rule: { root: string; segments: string[] }) =>
+    request<{ folderRule: { root: string; segments: string[] }; example: string }>(
+      '/api/admin/settings/folder-rule',
+      { method: 'PUT', body: JSON.stringify(rule) }
+    ),
 
   /* Settings — readable by every admin, editable by 마스터. */
 
