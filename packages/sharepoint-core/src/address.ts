@@ -1,103 +1,151 @@
 /**
  * Korean address parsing for folder names.
  *
- * A submitted address is whatever the field worker typed on a phone — often a
- * full postal address including the unit number. Folders should group by place,
- * not by household, so this pulls out two things and drops the rest:
+ * A submitted address is whatever the field worker typed on a phone. Folders
+ * should group by place, not by household, so this pulls out:
  *
  *   region    시도 + 시군구, e.g. "경기도광명시"
+ *   dong      읍/면/동/리, e.g. "소하동"
  *   building  the apartment or building name, e.g. "이편한세상"
  *
- * "경기도 광명시 소하동 이편한세상 101동 1502호"  ->  경기도광명시 / 이편한세상
- *
- * Dropping the unit number is the point: 101동 1502호 and 102동 903호 are the
+ * Dropping the unit number is the point: 107동 1402호 and 102동 903호 are the
  * same site visit, and separate folders per household would scatter one job
  * across dozens of directories.
+ *
+ * Spacing is ignored entirely. Korean addresses are very often typed with no
+ * spaces at all ("경기도광명시소하동이편한세상107동1402호"), so whitespace is
+ * stripped up front and every part is found by shape rather than by position.
+ * An earlier version split on spaces and produced "미지정" for exactly that
+ * input — the most common way an address actually arrives.
  */
 
 export interface ParsedAddress {
   /** 시도 (경기도, 서울특별시 ...). */
   sido: string;
-  /** 시군구, including a nested 구 when present (성남시 분당구). */
+  /** 시군구, including a nested 구 when present (성남시분당구). */
   sigungu: string;
-  /** sido + sigungu with spaces removed. */
+  /** sido + sigungu, e.g. 경기도광명시. */
   region: string;
-  /** Apartment or building name, empty when the address has none. */
+  /** 읍/면/동/리, e.g. 소하동. */
+  dong: string;
+  /**
+   * Apartment or building name. Falls back to `dong` when the address carries
+   * no building, so two different jobs in one 시군구 on the same day still land
+   * in different folders instead of merging into "0825_경기도광명시".
+   */
   building: string;
 }
 
 const UNSET = '미지정';
 
-/** 시도 — the widest level. Matched loosely: "경기" and "경기도" both count. */
-const SIDO = /(특별시|광역시|특별자치시|특별자치도|도)$/;
-const SIDO_SHORT = /^(서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주)$/;
-
-/** 시 / 군 / 구 — 성남시 분당구 keeps both. */
-const SIGUNGU = /(시|군|구)$/;
-
 /**
- * Parts that are neither region nor building.
- *
- * Order matters only for readability; each is tested independently.
+ * 시도, longest form first so 서울특별시 is not cut short at 서울.
+ * Both the formal and the everyday short form are accepted.
  */
-const DROP_PATTERNS: RegExp[] = [
-  /^\d+(-\d+)*$/, // 번지: 60, 123-4
-  /^[A-Za-z0-9]+동$/, // 동호수: 101동, A동, B동
-  /^지하/, // 지하1층, 지하주차장
-  /\d+호$/, // 1502호
-  /\d+층$/, // 5층
-  /^[가-힣]+동$/, // 법정동: 소하동, 하안동 — 시군구보다 아래라 제외
-  /(읍|면|리)$/, // 읍면리
-  /(로|길)$/, // 도로명: 하안로, 테헤란로, 안양천로
-  /^[가-힣]+로\d+(번길)?$/, // 도로명+번호: 하안로60, 중앙로12번길
+const SIDO_NAMES = [
+  '서울특별시', '부산광역시', '대구광역시', '인천광역시', '광주광역시', '대전광역시',
+  '울산광역시', '세종특별자치시', '경기도', '강원특별자치도', '강원도', '충청북도',
+  '충청남도', '전북특별자치도', '전라북도', '전라남도', '경상북도', '경상남도',
+  '제주특별자치도', '제주도',
+  '서울', '부산', '대구', '인천', '광주', '대전', '울산', '세종', '경기', '강원',
+  '충북', '충남', '전북', '전남', '경북', '경남', '제주',
 ];
 
-function isDroppable(token: string): boolean {
-  return DROP_PATTERNS.some((pattern) => pattern.test(token));
-}
+/**
+ * 시 / 군 / 구. Non-greedy from one character so 서구 matches as 서+구 while
+ * 구로구 still resolves to 구로+구 rather than stopping at the leading 구.
+ */
+const SIGUNGU = /^[가-힣]{1,6}?[시군구]/;
+
+/** 읍 / 면 / 동 / 리, plus the 1가·2가 form used in older city centres. */
+const DONG = /^[가-힣]{1,5}?[읍면동리](?=[^가-힣]|[가-힣]|$)/;
+const DONG_GA = /^[가-힣]{1,4}\d*가/;
+
+/** 도로명 + 건물번호: 하안로60, 테헤란로123, 중앙로12번길5. */
+const ROAD = /^[가-힣A-Za-z0-9]{1,12}?[로길]\d*(번길)?\d*(-\d+)?/;
 
 /**
- * Splits an address into region and building.
+ * Unit markers, stripped from the end one at a time.
  *
- * Everything the address contains beyond the region and the unit number is
- * treated as the building name, because a field worker writes the landmark they
- * actually navigated to — and that is the most useful thing to see in a folder
- * listing.
+ * Only trailing matches are removed, which is what keeps a number that belongs
+ * to the name: 래미안3단지101동1402호 loses 1402호 then 101동 and keeps 3단지.
  */
+const UNIT_SUFFIXES = [
+  /(\d+|[A-Za-z])동$/, // 107동, A동
+  /\d+호$/, // 1402호
+  /(지하)?\d*층$/, // 5층, 지하1층
+  /^지하\d*$/, // 지하
+  /[A-Za-z]?\d+가구$/,
+];
+
+function stripUnits(value: string): string {
+  let out = value;
+  let changed = true;
+
+  while (changed && out) {
+    changed = false;
+    for (const pattern of UNIT_SUFFIXES) {
+      const next = out.replace(pattern, '');
+      if (next !== out) {
+        out = next;
+        changed = true;
+      }
+    }
+  }
+  return out;
+}
+
 export function parseAddress(address: string): ParsedAddress {
-  const tokens = (address || '').trim().split(/\s+/).filter(Boolean);
+  // Spacing carries no information here and is inconsistent in practice.
+  let rest = (address || '').replace(/\s+/g, '');
 
-  if (tokens.length === 0) {
-    return { sido: UNSET, sigungu: UNSET, region: UNSET, building: '' };
+  if (!rest) {
+    return { sido: UNSET, sigungu: UNSET, region: UNSET, dong: '', building: '' };
   }
 
-  let index = 0;
+  // 시도
   let sido = '';
+  for (const name of SIDO_NAMES) {
+    if (rest.startsWith(name)) {
+      sido = name;
+      rest = rest.slice(name.length);
+      break;
+    }
+  }
+
+  // 시군구 — a 시 may be followed by a 구 (성남시분당구); a 구 or 군 ends it.
   let sigungu = '';
+  for (let depth = 0; depth < 2; depth += 1) {
+    const match = rest.match(SIGUNGU);
+    if (!match) break;
 
-  if (SIDO.test(tokens[0]) || SIDO_SHORT.test(tokens[0])) {
-    sido = tokens[index];
-    index += 1;
+    sigungu += match[0];
+    rest = rest.slice(match[0].length);
+    if (!match[0].endsWith('시')) break;
   }
 
-  // 시 then an optional nested 구 — 경기도 성남시 분당구.
-  while (index < tokens.length && SIGUNGU.test(tokens[index])) {
-    sigungu = sigungu ? `${sigungu} ${tokens[index]}` : tokens[index];
-    index += 1;
-    // Only a 시 can be followed by a 구; stop otherwise.
-    if (!/시$/.test(tokens[index - 1])) break;
+  // 읍면동리 — recorded, then set aside.
+  let dong = '';
+  const dongMatch = rest.match(DONG) || rest.match(DONG_GA);
+  if (dongMatch) {
+    dong = dongMatch[0];
+    rest = rest.slice(dong.length);
   }
 
-  const building = tokens
-    .slice(index)
-    .filter((token) => !isDroppable(token))
-    .join(' ')
-    .trim();
+  // 도로명 주소는 건물명이 아니므로 버립니다.
+  const roadMatch = rest.match(ROAD);
+  if (roadMatch) rest = rest.slice(roadMatch[0].length);
+
+  // 남은 것에서 동·호·층을 떼면 건물명입니다.
+  const building = stripUnits(rest).replace(/^[-_,.]+|[-_,.]+$/g, '');
 
   return {
     sido: sido || UNSET,
     sigungu: sigungu || UNSET,
-    region: `${sido}${sigungu}`.replace(/\s+/g, '') || UNSET,
-    building,
+    region: `${sido}${sigungu}` || UNSET,
+    dong,
+    // Without a building name the 동 is the most specific thing left, and it
+    // keeps two same-day jobs in one 시군구 from sharing a folder.
+    building: building || dong,
   };
 }

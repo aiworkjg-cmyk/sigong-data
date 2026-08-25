@@ -96,12 +96,6 @@ export function sanitizeFileName(name: string, maxLength = 120): string {
 }
 
 /**
- * Splits a Korean address into its administrative head parts so rules can file
- * by region. "경기 광명시 하안로 60" -> sido "경기", sigungu "광명시".
- */
-
-
-/**
  * Builds the token table a segment template can reference. Every value is
  * sanitized here so a template may combine tokens with literal separators
  * (`_`, `-`) without a user-supplied slash escaping the intended depth.
@@ -112,7 +106,7 @@ function buildTokens(ctx: FolderContext, maxLength: number): Record<string, stri
     : new Date(ctx.submittedAt || Date.now()).toISOString().slice(0, 10);
 
   const [yyyy, MM, dd] = date.split('-');
-  const { sido, sigungu, region, building } = parseAddress(ctx.address);
+  const { sido, sigungu, region, dong, building } = parseAddress(ctx.address);
   const submitted = new Date(ctx.submittedAt || Date.now());
 
   const raw: Record<string, string> = {
@@ -131,7 +125,9 @@ function buildTokens(ctx: FolderContext, maxLength: number): Record<string, stri
     sigungu,
     // 시도+시군구, e.g. 경기도광명시
     region,
-    // 아파트·건물 이름. 동호수와 상세주소는 제외됩니다.
+    // 읍/면/동/리
+    dong,
+    // 아파트·건물 이름. 동호수와 상세주소는 제외되며, 건물명이 없으면 동 이름이 들어갑니다.
     building,
     manager: ctx.managerName,
     siteId: ctx.siteId,

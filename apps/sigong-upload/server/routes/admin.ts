@@ -50,6 +50,7 @@ const AVAILABLE_TOKENS: { token: string; label: string; sample: string }[] = [
   { token: '{type}', label: '시공종류', sample: '백조' },
   { token: '{region}', label: '지역 (시도+시군구)', sample: '경기도광명시' },
   { token: '{building}', label: '건물·아파트명', sample: '이편한세상' },
+  { token: '{dong}', label: '읍면동', sample: '소하동' },
   { token: '{yyyy}', label: '연도', sample: '2026' },
   { token: '{MM}', label: '월', sample: '08' },
   { token: '{dd}', label: '일', sample: '24' },
