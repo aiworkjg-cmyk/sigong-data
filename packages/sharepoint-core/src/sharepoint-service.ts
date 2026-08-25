@@ -118,7 +118,7 @@ export class SharePointService {
       {
         현장고유ID: submission.id,
         시공종류: submission.constructionType,
-        담당자: submission.managerName,
+        시공기사: submission.managerName,
         주소: submission.address,
         시공일: submission.constructionDate,
         특이사항: submission.notes,
