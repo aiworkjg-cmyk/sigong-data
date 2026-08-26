@@ -38,6 +38,17 @@ export interface ConfigStatus {
   message: string;
 }
 
+/**
+ * How long to wait before reading the destination back.
+ *
+ * Rules that rename on upload fire moments after the item is created, so a
+ * check that runs immediately would see the original name and pass — the exact
+ * failure this verification exists to catch.
+ */
+const VERIFY_SETTLE_MS = 2500;
+
+const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
 export class SharePointService {
   private readonly credentials: SharePointCredentials;
   private readonly testModeRoot: string;
@@ -96,6 +107,92 @@ export class SharePointService {
       return { ok: false, error: 'SharePoint 연결 정보가 설정되지 않았습니다. (테스트 저장 모드)' };
     }
     return this.client.probe();
+  }
+
+  /**
+   * Reads the destination back and reports which uploads cannot be found.
+   *
+   * Matching is by name and size. Size matters because a name can be reused:
+   * if two uploads collapse onto one name, the survivor still matches by name
+   * while the other file is gone, and only the byte count reveals it.
+   *
+   * A verification that cannot run at all (the listing itself fails) is not
+   * treated as file loss — that would turn a transient network error into a
+   * false alarm on data that is most likely fine.
+   */
+  private async verifyStored(
+    folderPath: string,
+    synced: SyncedFileResult[],
+    files: PendingUpload[]
+  ): Promise<{ missing: SyncResult['failedFiles']; checked: boolean }> {
+    if (synced.length === 0) return { missing: [], checked: true };
+
+    // A rule that renames on upload runs just after the item is created, so a
+    // brief settle gives it time to act before the folder is read back. Test
+    // mode waits too — the point of test mode is to behave like the real thing,
+    // and a check that only runs late in production is a check nobody tested.
+    await delay(VERIFY_SETTLE_MS);
+
+    let present: Map<string, number>;
+    try {
+      const entries = this.client
+        ? await this.client.listChildren(folderPath)
+        : this.listLocally(folderPath);
+
+      present = new Map(
+        entries
+          .filter((entry) => !entry.folder && entry.name)
+          .map((entry) => [entry.name as string, Number(entry.size) || 0])
+      );
+    } catch (err) {
+      console.error('[sharepoint] 저장 확인 실패 — 확인을 건너뜁니다.', err);
+      return { missing: [], checked: false };
+    }
+
+    const sizeOf = new Map(files.map((file) => [file.id, file.size]));
+    const missing: SyncResult['failedFiles'] = [];
+
+    for (const entry of synced) {
+      const name = entry.remotePath.slice(entry.remotePath.lastIndexOf('/') + 1);
+      const actual = present.get(name);
+
+      if (actual === undefined) {
+        missing.push({
+          id: entry.id,
+          fileName: entry.fileName,
+          error:
+            '업로드 후 저장소에서 파일을 찾지 못했습니다. ' +
+            '저장소에 파일 이름을 바꾸는 규칙(흐름)이 있는지 확인해 주세요.',
+        });
+        continue;
+      }
+
+      const expected = sizeOf.get(entry.id);
+      if (expected !== undefined && actual > 0 && actual !== expected) {
+        missing.push({
+          id: entry.id,
+          fileName: entry.fileName,
+          error: `저장된 파일 크기가 다릅니다. (보낸 크기 ${expected} / 저장된 크기 ${actual})`,
+        });
+      }
+    }
+
+    return { missing, checked: true };
+  }
+
+  /** Test-mode counterpart of listChildren, so verification works there too. */
+  private listLocally(folderPath: string): DriveItem[] {
+    const dir = path.join(this.testModeRoot, folderPath);
+    if (!fs.existsSync(dir)) return [];
+
+    return fs.readdirSync(dir, { withFileTypes: true }).map((entry) => {
+      const stat = entry.isFile() ? fs.statSync(path.join(dir, entry.name)) : null;
+      return {
+        name: entry.name,
+        size: stat?.size ?? 0,
+        folder: entry.isDirectory() ? {} : undefined,
+      } as DriveItem;
+    });
   }
 
   /** Resolves the destination paths for a submission under the active rule. */
@@ -196,6 +293,23 @@ export class SharePointService {
         }
       }
 
+      // A successful upload call is not proof the file is still there. A
+      // library rule or a Power Automate flow can rename or move an item right
+      // after it lands — and when several files end up with the same name, each
+      // one silently replaces the last. Reading the folder back is the only way
+      // to know what actually survived, so nothing is reported as stored until
+      // it has been seen in the destination.
+      const verification = await this.verifyStored(
+        folders.attachmentsFolderPath,
+        synced,
+        files
+      );
+      for (const problem of verification.missing) {
+        const index = synced.findIndex((entry) => entry.id === problem.id);
+        if (index >= 0) synced.splice(index, 1);
+        failed.push(problem);
+      }
+
       const mode = this.client ? 'LIVE' : 'TEST_MODE';
       const success = failed.length === 0;
 
@@ -208,8 +322,8 @@ export class SharePointService {
         syncedFiles: synced,
         failedFiles: failed,
         message: success
-          ? `${mode === 'LIVE' ? 'SharePoint' : '테스트 저장소'} [${folders.fullFolderPath}] 에 ${synced.length}개 파일을 저장했습니다.`
-          : `일부 파일 저장에 실패했습니다. (성공 ${synced.length}개 / 실패 ${failed.length}개)`,
+          ? `${mode === 'LIVE' ? 'SharePoint' : '테스트 저장소'} [${folders.fullFolderPath}] 에 ${synced.length}개 파일 저장을 확인했습니다.`
+          : `저장 확인에 실패한 파일이 있습니다. (확인 ${synced.length}개 / 실패 ${failed.length}개)`,
       };
     } catch (err: any) {
       return {

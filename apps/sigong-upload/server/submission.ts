@@ -30,8 +30,9 @@ export function stagingDirFor(siteId: string): string {
  * submitter's ordering visible in a folder listing and prevents two identically
  * named photos from overwriting each other.
  *
- * Multer stages each file under this exact name too, so the worker can locate
- * the staged file from the stored record alone. Both paths must call this.
+ * Multer uses this for the staged copy as well, but the two numberings are not
+ * guaranteed to agree — see SiteFile.stagedName. The staged copy is located by
+ * the name multer reported, and only the destination name comes from here.
  */
 export function storedNameFor(index: number, originalName: string): string {
   return `${String(index + 1).padStart(2, '0')}_${sanitizeFileName(originalName)}`;
@@ -82,6 +83,8 @@ export class SubmissionIntake {
         id: generateId('file'),
         originalName: file.originalname,
         storedName: storedNameFor(index, file.originalname),
+        // What multer actually wrote, straight from multer — never recomputed.
+        stagedName: file.filename,
         fileType: classifyFile(file.mimetype),
         mimeType: file.mimetype,
         size: file.size,

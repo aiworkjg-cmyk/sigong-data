@@ -94,7 +94,10 @@ export class SubmissionWorker {
       .map((file) => ({
         id: file.id,
         fileName: file.storedName,
-        filePath: path.join(stagingDir, file.storedName),
+        // Read by the name multer gave the staged copy; write under the ordered
+        // name. Records from before stagedName existed fall back to the old
+        // assumption, which is the best that can be done for them.
+        filePath: path.join(stagingDir, file.stagedName || file.storedName),
         fileType: file.fileType,
         size: file.size,
       }))

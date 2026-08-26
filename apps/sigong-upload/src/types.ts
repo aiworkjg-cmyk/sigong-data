@@ -59,6 +59,18 @@ export interface SiteFile {
   originalName: string;
   /** Sanitized, index-prefixed name actually written to SharePoint. */
   storedName: string;
+  /**
+   * The name multer actually gave the staged copy on disk.
+   *
+   * This is not always equal to storedName. Multer names each part as it
+   * finishes, so with several files in flight the numbering it hands out can
+   * differ from the order req.files ends up in — and the worker, which looked
+   * for storedName on disk, silently dropped every file whose two names had
+   * drifted apart. Recording the real name removes the guess.
+   *
+   * Optional because records written before this existed carry only storedName.
+   */
+  stagedName?: string;
   fileType: FileKind;
   mimeType: string;
   size: number;
