@@ -5,6 +5,7 @@ import { requireManager, requireMaster } from '../auth';
 import { config } from '../config';
 import { mailer } from '../mailer';
 import { SettingsError } from '../settings';
+import { buildCard, teams } from '../teams';
 import type { AppContext } from '../context';
 import { ASSIGNABLE_ROLES } from '../../src/types';
 import type {
@@ -651,6 +652,69 @@ export function createAdminRouter(ctx: AppContext): Router {
     } catch (err) {
       handleSettingsError(err, res);
     }
+  });
+
+  /* ---------------------------------------------------------------- */
+  /* Teams 알림 (master only)                                          */
+  /* ---------------------------------------------------------------- */
+
+  router.get('/settings/teams-webhook', requireMaster, (_req, res) => {
+    res.json({ teamsWebhookUrl: ctx.settings.teamsWebhookUrl() });
+  });
+
+  router.put('/settings/teams-webhook', requireMaster, async (req, res) => {
+    try {
+      const teamsWebhookUrl = await ctx.settings.setTeamsWebhookUrl(String(req.body?.url ?? ''));
+      res.json({ teamsWebhookUrl });
+    } catch (err) {
+      handleSettingsError(err, res);
+    }
+  });
+
+  /**
+   * Sends one sample card.
+   *
+   * Worth its own button: the alternative is filing a real submission to find
+   * out the address was wrong, and a webhook that silently fails is
+   * indistinguishable from one that was never called.
+   */
+  router.post('/settings/teams-webhook/test', requireMaster, async (req, res) => {
+    const url = String(req.body?.url ?? '').trim() || ctx.settings.teamsWebhookUrl();
+    if (!url) {
+      res.status(400).json({ error: '설정 오류', message: '알림 주소를 먼저 입력해 주세요.' });
+      return;
+    }
+
+    const sample = {
+      id: 'BAEKJO-20260826-001',
+      constructionType: ctx.settings.constructionTypes()[0] || '백조',
+      technicians: [{ id: 'sample', name: '홍길동', title: '팀장' as const }],
+      managerName: '홍길동(팀장)',
+      address: '경기도 광명시 소하동 이편한세상 107동 1402호',
+      constructionDate: new Date().toISOString().slice(0, 10),
+      notes: '알림 연결 확인용 예시입니다. 실제 제출 기록이 아닙니다.',
+      createdAt: new Date().toISOString(),
+      status: 'COMPLETED' as const,
+      storageMode: 'LIVE' as const,
+      folderPath: ctx.sharePoint.getConfigStatus().examplePath,
+      attachmentsFolderPath: '',
+      files: [
+        { id: 'f1', originalName: '현장사진.jpg', storedName: '01_현장사진.jpg',
+          fileType: 'image' as const, mimeType: 'image/jpeg', size: 0, sizeFormatted: '0 B',
+          status: 'completed' as const },
+      ],
+    };
+
+    const result = await teams.post(url, buildCard(sample));
+    if (!result.ok) {
+      res.status(502).json({
+        error: '알림 전송 실패',
+        message: result.error || '알 수 없는 오류',
+        status: result.status,
+      });
+      return;
+    }
+    res.json({ success: true });
   });
 
   /* ---------------------------------------------------------------- */

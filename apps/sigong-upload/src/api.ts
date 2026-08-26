@@ -237,6 +237,23 @@ export const adminApi = {
       { method: 'DELETE' }
     ),
 
+  /* Teams 알림 */
+
+  teamsWebhook: () =>
+    request<{ teamsWebhookUrl: string }>('/api/admin/settings/teams-webhook'),
+
+  setTeamsWebhook: (url: string) =>
+    request<{ teamsWebhookUrl: string }>('/api/admin/settings/teams-webhook', {
+      method: 'PUT',
+      body: JSON.stringify({ url }),
+    }),
+
+  testTeamsWebhook: (url: string) =>
+    request<{ success: boolean }>('/api/admin/settings/teams-webhook/test', {
+      method: 'POST',
+      body: JSON.stringify({ url }),
+    }),
+
   /* 폴더 생성 규칙 */
 
   folderRule: () =>

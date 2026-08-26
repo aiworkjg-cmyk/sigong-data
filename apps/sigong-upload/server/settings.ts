@@ -12,6 +12,7 @@ const DELETE_REQUEST_EMAILS_KEY = 'deleteRequestEmails';
 /** Written by an earlier version that held a single address. */
 const LEGACY_DELETE_EMAIL_KEY = 'deleteRequestEmail';
 const FOLDER_RULE_KEY = 'folderRule';
+const TEAMS_WEBHOOK_KEY = 'teamsWebhookUrl';
 const MAX_DELETE_EMAILS = 20;
 const MAX_SEGMENTS = 8;
 
@@ -51,6 +52,7 @@ export class SettingsService {
   private technicianList: Technician[] = [];
   private deleteRequestEmailList: string[] = [];
   private folderRuleValue: FolderRule = DEFAULT_RULE;
+  private teamsWebhookValue = '';
 
   constructor(private readonly repo: SettingsRepository) {}
 
@@ -81,6 +83,8 @@ export class SettingsService {
     // stored rule wins so a redeploy cannot revert a deliberate change.
     this.folderRuleValue = parseFolderRule(await this.repo.get(FOLDER_RULE_KEY))
       ?? loadFolderRuleFromEnv();
+
+    this.teamsWebhookValue = (await this.repo.get(TEAMS_WEBHOOK_KEY)) || '';
   }
 
   constructionTypes(): string[] {
@@ -405,6 +409,42 @@ export class SettingsService {
     this.folderRuleValue = { ...this.folderRuleValue, root, segments };
     await this.repo.set(FOLDER_RULE_KEY, JSON.stringify({ root, segments }));
     return this.folderRule();
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* Teams 알림                                                         */
+  /* ---------------------------------------------------------------- */
+
+  teamsWebhookUrl(): string {
+    return this.teamsWebhookValue;
+  }
+
+  async setTeamsWebhookUrl(value: string): Promise<string> {
+    const url = (value || '').trim();
+
+    // Empty simply turns notifications off.
+    if (url) {
+      let parsed: URL;
+      try {
+        parsed = new URL(url);
+      } catch {
+        throw new SettingsError('올바른 주소가 아닙니다. https:// 로 시작하는 전체 주소를 넣어 주세요.');
+      }
+      // The app posts to this address on every submission, so it must not be a
+      // plain-text hop or an arbitrary host chosen by mistake.
+      if (parsed.protocol !== 'https:') {
+        throw new SettingsError('보안을 위해 https:// 주소만 사용할 수 있습니다.');
+      }
+      if (!/(^|\.)(microsoft\.com|office\.com|azure\.com)$/i.test(parsed.hostname)) {
+        throw new SettingsError(
+          'Microsoft Teams 워크플로 주소가 아닙니다. Teams 에서 발급한 주소를 붙여넣어 주세요.'
+        );
+      }
+    }
+
+    this.teamsWebhookValue = url;
+    await this.repo.set(TEAMS_WEBHOOK_KEY, url);
+    return url;
   }
 
   /* ---------------------------------------------------------------- */

@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
+  Bell,
   Check,
   FolderTree,
   Info,
@@ -8,6 +9,7 @@ import {
   Pencil,
   Plus,
   RotateCcw,
+  Send,
   Settings,
   Trash2,
   X,
@@ -52,6 +54,10 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({ role }) => {
   const [example, setExample] = useState('');
   const [tokens, setTokens] = useState<TokenInfo[]>([]);
 
+  // Teams 알림
+  const [webhook, setWebhook] = useState('');
+  const [savedWebhook, setSavedWebhook] = useState('');
+
   // 삭제 요청 수신 메일
   const [emails, setEmails] = useState<string[]>([]);
   const [emailDraft, setEmailDraft] = useState('');
@@ -65,9 +71,10 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({ role }) => {
   const load = useCallback(async () => {
     setError(null);
     try {
-      const [rule, mail] = await Promise.all([
+      const [rule, mail, hook] = await Promise.all([
         adminApi.folderRule(),
         adminApi.deleteRequestEmails(),
+        adminApi.teamsWebhook(),
       ]);
       setRoot(rule.folderRule.root);
       setSegments(rule.folderRule.segments);
@@ -75,6 +82,8 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({ role }) => {
       setExample(rule.example);
       setTokens(rule.availableTokens);
       setEmails(mail.deleteRequestEmails);
+      setWebhook(hook.teamsWebhookUrl);
+      setSavedWebhook(hook.teamsWebhookUrl);
     } catch (err: any) {
       setError(err?.message || '설정을 불러오지 못했습니다.');
     }
@@ -113,6 +122,40 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({ role }) => {
 
   const insertToken = (index: number, token: string) =>
     updateSegment(index, `${segments[index] ?? ''}${token}`);
+
+  /* ---------------------------------------------------------------- */
+  /* Teams 알림                                                         */
+  /* ---------------------------------------------------------------- */
+
+  const handleSaveWebhook = async () => {
+    setBusy('webhook');
+    setError(null);
+    try {
+      const { teamsWebhookUrl } = await adminApi.setTeamsWebhook(webhook);
+      setWebhook(teamsWebhookUrl);
+      setSavedWebhook(teamsWebhookUrl);
+      setNotice(
+        teamsWebhookUrl ? 'Teams 알림 주소를 저장했습니다.' : 'Teams 알림을 껐습니다.'
+      );
+    } catch (err: any) {
+      setError(err?.message || '알림 주소 저장에 실패했습니다.');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const handleTestWebhook = async () => {
+    setBusy('webhook-test');
+    setError(null);
+    try {
+      await adminApi.testTeamsWebhook(webhook);
+      setNotice('테스트 카드를 보냈습니다. Teams 채널을 확인해 주세요.');
+    } catch (err: any) {
+      setError(err?.message || '테스트 전송에 실패했습니다.');
+    } finally {
+      setBusy(null);
+    }
+  };
 
   /* ---------------------------------------------------------------- */
   /* 수신 메일                                                          */
@@ -339,6 +382,78 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({ role }) => {
           <span>
             규칙을 바꿔도 <strong>이미 저장된 폴더는 옮겨지지 않습니다.</strong> 다음 제출부터
             적용되므로, 운영 중에 자주 바꾸면 같은 현장 자료가 여러 위치로 흩어집니다.
+          </span>
+        </div>
+      </div>
+
+      {/* ========================== Teams 알림 ========================== */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-6 mb-4">
+        <h3 className="text-base font-bold text-slate-900 mb-1 flex items-center gap-2">
+          <Bell className="w-4 h-4 text-blue-600" />
+          Teams 알림
+        </h3>
+        <p className="text-xs text-slate-500 mb-4">
+          자료 제출이 끝나면 Teams 채널에 카드를 보냅니다. <strong>저장이 확인된 뒤에만</strong>{' '}
+          보내므로, 카드에 적힌 파일 수가 실제로 저장된 수입니다.
+        </p>
+
+        <label className="block mb-3">
+          <span className="block text-xs font-bold text-slate-700 mb-1.5">
+            Teams 워크플로 주소
+            <span className="ml-1.5 font-normal text-slate-400">(비워 두면 알림을 보내지 않음)</span>
+          </span>
+          <input
+            type="url"
+            value={webhook}
+            onChange={(event) => setWebhook(event.target.value)}
+            disabled={readOnly}
+            placeholder="예: https://prod-00.koreacentral.logic.azure.com:443/workflows/..."
+            className="w-full px-3 py-2.5 rounded-lg border border-slate-300 text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-50"
+          />
+        </label>
+
+        {!readOnly && (
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void handleSaveWebhook()}
+              disabled={busy === 'webhook' || webhook === savedWebhook}
+              className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-bold"
+            >
+              {busy === 'webhook' ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Check className="w-3.5 h-3.5" />
+              )}
+              저장
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleTestWebhook()}
+              disabled={busy === 'webhook-test' || !webhook.trim()}
+              className="inline-flex items-center gap-1.5 px-3 py-2.5 rounded-lg border border-slate-300 hover:bg-slate-50 disabled:opacity-50 text-xs font-semibold text-slate-700"
+            >
+              {busy === 'webhook-test' ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Send className="w-3.5 h-3.5" />
+              )}
+              테스트 카드 보내기
+            </button>
+            {webhook !== savedWebhook && (
+              <span className="text-[11px] font-semibold text-amber-700">
+                저장하지 않은 변경이 있습니다
+              </span>
+            )}
+          </div>
+        )}
+
+        <div className="mt-4 flex items-start gap-2 text-[11px] text-slate-500 border-t border-slate-100 pt-3">
+          <Info className="w-3.5 h-3.5 shrink-0 mt-0.5 text-slate-400" />
+          <span>
+            주소 만드는 법: Teams 채널 이름 옆 <strong>···</strong> →{' '}
+            <strong>워크플로</strong> → <strong>&quot;웹후크 요청을 받으면 채널에 게시&quot;</strong>{' '}
+            템플릿 → 만들어진 주소를 여기에 붙여넣습니다.
           </span>
         </div>
       </div>

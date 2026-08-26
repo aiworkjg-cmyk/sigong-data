@@ -3,6 +3,8 @@ import path from 'path';
 import type { PendingUpload, SharePointService, SyncResult } from '@jg/sharepoint-core';
 import { config } from './config';
 import { mailer } from './mailer';
+import { teams } from './teams';
+import type { SettingsService } from './settings';
 import type { Repositories } from './repositories';
 import { stagingDirFor } from './submission';
 import type { SiteRecord, UploadLog, UploadResult } from '../src/types';
@@ -32,7 +34,9 @@ export class SubmissionWorker {
 
   constructor(
     private readonly repos: Repositories,
-    private readonly sharePoint: SharePointService
+    private readonly sharePoint: SharePointService,
+    /** Read at send time so a webhook change takes effect without a restart. */
+    private readonly settings: SettingsService
   ) {}
 
   enqueue(job: Job): void {
@@ -167,6 +171,12 @@ export class SubmissionWorker {
     record.syncedAt = new Date().toISOString();
     await this.repos.sites.save(record);
     await this.appendLog(record, sync, job);
+
+    // Announce only once the outcome is settled. A card sent while retries are
+    // still pending would report a shortfall that fixes itself a minute later.
+    if (allStored || exhausted) {
+      void teams.notifyQuietly(this.settings.teamsWebhookUrl(), record);
+    }
 
     if (allStored) {
       await removeQuietly(stagingDirFor(record.id));

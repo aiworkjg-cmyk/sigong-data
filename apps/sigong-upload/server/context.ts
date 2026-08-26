@@ -38,12 +38,14 @@ export async function createContext(): Promise<AppContext> {
   });
 
   const repos = await createRepositories();
-  const worker = new SubmissionWorker(repos, sharePoint);
 
   // Loaded before the server accepts traffic: the submission endpoint checks
-  // every upload against this list.
+  // every upload against this list, and the worker reads the notification
+  // address from it, so it has to exist before either is built.
   const settings = new SettingsService(repos.settings);
   await settings.load();
+
+  const worker = new SubmissionWorker(repos, sharePoint, settings);
 
   const siteIds = new SiteIdFactory(repos.settings);
   await siteIds.load();
