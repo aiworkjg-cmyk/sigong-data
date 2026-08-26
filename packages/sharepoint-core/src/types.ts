@@ -26,7 +26,8 @@ export interface PendingUpload {
   fileName: string;
   /** Absolute path to the staged temp file. */
   filePath: string;
-  fileType: string;
+  /** 이미지·동영상 구분이 파일 이름의 접두사가 되므로 값이 정해져 있어야 합니다. */
+  fileType: 'image' | 'video' | 'other';
   size: number;
 }
 

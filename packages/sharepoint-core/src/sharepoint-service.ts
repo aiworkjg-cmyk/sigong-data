@@ -1,7 +1,13 @@
 import fs from 'fs';
 import path from 'path';
 import { GraphClient } from './graph-client';
-import { loadFolderRuleFromEnv, resolveFolder, sanitizeFileName } from './folder-rules';
+import {
+  buildStoredName,
+  loadFolderRuleFromEnv,
+  nextSequences,
+  resolveFolder,
+  sanitizeFileName,
+} from './folder-rules';
 import type { FolderRule } from './folder-rules';
 import type {
   DriveItem,
@@ -180,6 +186,18 @@ export class SharePointService {
     return { missing, checked: true };
   }
 
+  /** File names already in a folder; an unreachable folder simply reads empty. */
+  private async existingNames(folderPath: string): Promise<string[]> {
+    try {
+      const entries = this.client
+        ? await this.client.listChildren(folderPath)
+        : this.listLocally(folderPath);
+      return entries.filter((entry) => !entry.folder && entry.name).map((entry) => entry.name as string);
+    } catch {
+      return [];
+    }
+  }
+
   /** Test-mode counterpart of listChildren, so verification works there too. */
   private listLocally(folderPath: string): DriveItem[] {
     const dir = path.join(this.testModeRoot, folderPath);
@@ -273,18 +291,29 @@ export class SharePointService {
         }
       }
 
+      // Numbering continues from whatever the folder already holds — a retry,
+      // an earlier submission to the same site, or a file added by hand. Naming
+      // from our own count alone would restart at 001 and overwrite them.
+      const folderLeaf =
+        folders.fullFolderPath.slice(folders.fullFolderPath.lastIndexOf('/') + 1) || '자료';
+      const sequence = nextSequences(await this.existingNames(folders.attachmentsFolderPath));
+
       for (const file of files) {
         if (!fs.existsSync(file.filePath)) {
           failed.push({ id: file.id, fileName: file.fileName, error: '임시 파일을 찾을 수 없습니다.' });
           continue;
         }
 
-        const remotePath = `${folders.attachmentsFolderPath}/${sanitizeFileName(file.fileName)}`;
+        const kind = file.fileType === 'image' ? '이미지' : file.fileType === 'video' ? '동영상' : '파일';
+        sequence[kind] += 1;
+        const storedName = buildStoredName(folderLeaf, file.fileType, sequence[kind], file.fileName);
+        const remotePath = `${folders.attachmentsFolderPath}/${storedName}`;
+
         try {
           const item = await uploadOne(remotePath, file.filePath);
           synced.push({
             id: file.id,
-            fileName: file.fileName,
+            fileName: storedName,
             remotePath,
             webUrl: item?.webUrl,
           });

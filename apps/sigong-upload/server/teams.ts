@@ -64,13 +64,47 @@ export function buildCard(record: SiteRecord, folderUrl?: string) {
       size: 'Medium',
       wrap: true,
     },
+    // A tinted band rather than coloured text. A channel is skimmed, not read,
+    // and the one thing that must survive a glance is whether this needs
+    // attention — green for stored, red for not.
     {
-      type: 'TextBlock',
-      text: label,
-      color: tone === 'good' ? 'Good' : tone === 'warning' ? 'Warning' : 'Attention',
-      weight: 'Bolder',
-      spacing: 'None',
-      wrap: true,
+      type: 'Container',
+      style: tone,
+      bleed: true,
+      items: [
+        {
+          type: 'ColumnSet',
+          columns: [
+            {
+              type: 'Column',
+              width: 'stretch',
+              items: [
+                {
+                  type: 'TextBlock',
+                  text: `업로드 상태 · ${label}`,
+                  weight: 'Bolder',
+                  size: 'Medium',
+                  color: tone === 'good' ? 'Good' : tone === 'warning' ? 'Warning' : 'Attention',
+                  wrap: true,
+                },
+              ],
+            },
+            {
+              type: 'Column',
+              width: 'auto',
+              items: [
+                {
+                  type: 'TextBlock',
+                  text: stored === total ? `${total} / ${total}` : `${stored} / ${total}`,
+                  weight: 'Bolder',
+                  size: 'Medium',
+                  color: tone === 'good' ? 'Good' : 'Attention',
+                },
+              ],
+            },
+          ],
+        },
+      ],
     },
     factSet([
       ['현장 ID', record.id],
@@ -80,7 +114,9 @@ export function buildCard(record: SiteRecord, folderUrl?: string) {
       ['현장주소', record.address],
       [
         '파일',
-        stored === total ? `${total}개 저장 확인` : `${stored}개 저장 / ${total}개 중`,
+        stored === total
+          ? `${total}개 모두 저장 확인`
+          : `${total}개 중 ${stored}개만 저장됨 (${total - stored}개 실패)`,
       ],
       ['특이사항', record.notes],
     ]),

@@ -133,6 +133,10 @@ export class SubmissionWorker {
       record.syncedAt = new Date().toISOString();
       await this.repos.sites.save(record);
       await mailer.notifyQuietly(record, [record.syncMessage]);
+      // This path never reaches the sync step, so without its own call the
+      // channel would hear nothing at all about a submission that failed
+      // outright — the case most worth hearing about.
+      void teams.notifyQuietly(this.settings.teamsWebhookUrl(), record);
       return;
     }
 
@@ -206,6 +210,9 @@ export class SubmissionWorker {
         return {
           ...file,
           status: 'completed' as const,
+          // The final name is decided at upload time (numbering continues from
+          // the folder), so the record takes it back from the sync result.
+          storedName: ok.fileName || file.storedName,
           remotePath: ok.remotePath,
           webUrl: ok.webUrl,
           errorMessage: undefined,

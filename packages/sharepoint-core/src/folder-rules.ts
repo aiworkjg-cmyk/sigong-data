@@ -80,6 +80,52 @@ export function sanitizeSegment(name: string, maxLength = 60): string {
   return cleaned || '미지정';
 }
 
+/**
+ * The stored name for one attachment: 0826_경기도광명시_이편한세상_이미지001.jpg
+ *
+ * Images and videos are counted separately so a folder listing reads as
+ * "photos 1..10, videos 1..2" rather than one interleaved run — that is how
+ * people actually look for a picture. The folder's own name is repeated in the
+ * file name because files get copied, mailed and dragged out of the folder, and
+ * a bare "이미지001.jpg" tells the person holding it nothing.
+ */
+export function buildStoredName(
+  folderLeaf: string,
+  fileType: 'image' | 'video' | 'other',
+  sequence: number,
+  originalName: string
+): string {
+  const kind = fileType === 'image' ? '이미지' : fileType === 'video' ? '동영상' : '파일';
+  const dot = originalName.lastIndexOf('.');
+  // Only treat a short trailing group as an extension; "2026.08.26 사진" is not.
+  const ext = dot > 0 && originalName.length - dot <= 12 ? originalName.slice(dot) : '';
+
+  return sanitizeFileName(
+    `${folderLeaf}_${kind}${String(sequence).padStart(3, '0')}${ext}`
+  );
+}
+
+/**
+ * Highest sequence already used in a folder, per kind.
+ *
+ * Read from the destination rather than from our own records, so a file someone
+ * dropped in by hand is counted too — otherwise the next submission would
+ * restart at 001 and overwrite it.
+ */
+export function nextSequences(existingNames: string[]): Record<string, number> {
+  const highest: Record<string, number> = { 이미지: 0, 동영상: 0, 파일: 0 };
+
+  for (const name of existingNames) {
+    const match = name.match(/_(이미지|동영상|파일)(\d{1,4})(\.|$)/);
+    if (!match) continue;
+
+    const kind = match[1];
+    const value = Number(match[2]);
+    if (Number.isFinite(value) && value > highest[kind]) highest[kind] = value;
+  }
+  return highest;
+}
+
 /** Keeps a filename safe while preserving its extension through truncation. */
 export function sanitizeFileName(name: string, maxLength = 120): string {
   const safe = (name || '').replace(FORBIDDEN_CHARS, '_').replace(/\s+/g, ' ').trim();
