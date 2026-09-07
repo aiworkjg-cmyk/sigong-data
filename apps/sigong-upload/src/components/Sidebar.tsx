@@ -9,7 +9,9 @@ import {
   Tags,
   ShieldCheck,
   Upload,
+  UserCog,
   Users,
+  CalendarDays,
 } from 'lucide-react';
 import { canManageTechnicians, isMaster } from '../types';
 import type { AdminSession } from '../types';
@@ -19,9 +21,12 @@ export type AppView =
   | 'completed'
   | 'history'
   | 'technicians'
+  | 'technician-roster'
   | 'construction-types'
   | 'admin-login'
   | 'admin-sites'
+  | 'work-orders'
+  | 'calendar'
   | 'admin-detail'
   | 'admin-logs'
   | 'admin-issues'
@@ -50,16 +55,31 @@ const PRIMARY_ITEMS: NavItem[] = [
 /** Roster management — 마스터 and 업체 관리자; 시공종류 is master-only. */
 const MANAGER_ITEMS: NavItem[] = [
   {
+    view: 'work-orders',
+    label: '주문서 등록 · 연동',
+    Icon: ClipboardList,
+    visible: (session) => canManageTechnicians(session?.role),
+  },
+  {
+    view: 'calendar',
+    label: '시공건 관리',
+    Icon: CalendarDays,
+    visible: (session) => canManageTechnicians(session?.role),
+  },
+  {
+    // 시공종류와 그 종류에 딸린 입력 항목. 기사 명부는 따로 뺐습니다 —
+    // 기사는 자주 들고 나는 데다 이 화면은 종류를 정하는 곳이라, 한데 두면
+    // 기사 한 명 추가하려고 종류 설정 화면을 지나야 했습니다.
     view: 'technicians',
-    label: '시공기사 관리',
+    label: '시공종류별 현장',
     Icon: Users,
     visible: (session) => canManageTechnicians(session?.role),
   },
   {
-    view: 'construction-types',
-    label: '시공종류 관리',
-    Icon: Tags,
-    visible: (session) => isMaster(session?.role),
+    view: 'technician-roster',
+    label: '시공기사 관리',
+    Icon: UserCog,
+    visible: (session) => canManageTechnicians(session?.role),
   },
 ];
 

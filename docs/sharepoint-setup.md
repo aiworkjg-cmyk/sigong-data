@@ -34,13 +34,46 @@ Azure AD에서 앱 등록 및 관리자 동의를 할 수 있는 권한)이 있�
 
 ## 4. Microsoft Graph API 권한 부여
 
+팀·채널을 찾는 방법은 두 가지입니다. **A안(로그인 방식)** 은 테넌트 관리자 동의 없이도 대부분
+동작하므로 먼저 시도해 보세요. **B안(앱 권한 방식)** 은 관리자 동의가 반드시 필요합니다.
+
+### A안 (권장) — 마스터관리자가 본인 계정으로 로그인
+
+설정 화면의 **[Microsoft 로그인]** 버튼이 쓰는 방식입니다. 로그인한 사람의 권한으로 조회하므로
+`Team.ReadBasic.All` 같은 *애플리케이션* 권한과 그 관리자 동의가 필요 없습니다.
+
+1. 앱 등록 화면 왼쪽 메뉴 → **인증(Authentication)** → **플랫폼 추가** → **웹(Web)**
+2. 리디렉션 URI 에 앱 주소 + `/api/admin/settings/microsoft/callback` 을 등록합니다.
+   - 로컬: `http://localhost:3000/api/admin/settings/microsoft/callback`
+   - 운영: `https://<배포주소>/api/admin/settings/microsoft/callback`
+   - 두 환경을 함께 쓴다면 두 개 모두 등록해도 됩니다. **주소가 한 글자라도 다르면 AADSTS50011 이 납니다.**
+3. **API 권한** → **위임된 권한(Delegated permissions)** 으로 다음을 추가합니다.
+   `Team.ReadBasic.All`, `Channel.ReadBasic.All`, `Files.ReadWrite.All`, `Sites.ReadWrite.All`, `User.Read`
+4. 설정 화면에서 **[Microsoft 로그인]** → 업무 계정으로 로그인 → 동의.
+   - 로그인한 계정은 서버에 기억되므로, 다음부터는 **팀 이름과 채널 이름만** 입력하면 됩니다.
+   - 개별 사용자 동의가 차단된 테넌트라면, 로그인 블록 안의 **관리자 동의 주소**를 조직 관리자가
+     1회 열어 동의하면 이후 모든 사용자에게 적용됩니다.
+
+> 파일 **업로드**는 제출자가 이미 떠난 뒤 백그라운드에서 진행되므로 여전히 앱 자격 증명
+> (클라이언트 비밀)을 사용합니다. A안은 "저장 위치를 찾는" 단계의 권한 문제만 해결합니다.
+> 따라서 업로드용 쓰기 권한은 아래 B안의 4번 항목이 그대로 필요합니다.
+
+### B안 — 애플리케이션 권한 (테넌트 관리자 동의 필요)
+
 1. 앱 등록 화면 왼쪽 메뉴 → **API 권한(API permissions)** → **권한 추가(Add a permission)**
 2. **Microsoft Graph** → **애플리케이션 권한(Application permissions)** 선택
-3. 다음 중 하나를 추가:
-   - **`Sites.Selected`** (권장 — 지정한 사이트에만 접근 가능, 더 안전) 또는
-   - **`Sites.ReadWrite.All`** (모든 SharePoint 사이트에 읽기/쓰기 가능, 설정은 간단하지만 권한 범위가 넓음)
-4. 업로드 실패 알림 메일을 쓰려면 **`Mail.Send`** 도 함께 추가합니다 (애플리케이션 권한).
-5. 추가 후 반드시 **"~에 대한 관리자 동의 부여(Grant admin consent)"** 버튼 클릭 (조직 관리자만 가능)
+3. 설정 화면에서 **Microsoft 계정 이메일 + Teams 팀 이름 + 채널 이름**만으로 자동 연결하려면
+   다음 **애플리케이션 권한**을 추가합니다.
+   - **`Team.ReadBasic.All`** — 입력한 계정이 속한 팀 이름 조회
+   - **`Channel.ReadBasic.All`** — 선택한 팀의 채널 이름 조회
+4. 채널 저장 위치 조회와 파일 쓰기 권한은 다음 중 한 방식을 선택합니다.
+   - **`Files.Read.All` + `Sites.Selected`** (권장) — 채널 저장 위치는 조회할 수 있고 쓰기는
+     지정한 사이트로 제한합니다. 새 사이트를 처음 연결할 때 아래의 사이트별 `write` 승인을
+     한 번 해야 합니다.
+   - **`Files.ReadWrite.All`** — 관리자 동의 한 번으로 이후 팀/채널을 이름만 입력해 연결하고
+     바로 업로드할 수 있지만, 앱이 조직 전체 파일을 읽고 쓸 수 있어 권한 범위가 큽니다.
+5. 업로드 실패 알림 메일을 쓰려면 **`Mail.Send`** 도 함께 추가합니다 (애플리케이션 권한).
+6. 추가 후 반드시 **"~에 대한 관리자 동의 부여(Grant admin consent)"** 버튼 클릭 (조직 관리자만 가능)
    - 이 버튼을 누르지 않으면 토큰은 발급되지만 실제 파일 업로드 시 403 오류가 발생합니다.
 
 > **Mail.Send 주의**: 이 권한은 테넌트의 모든 사서함으로 발송이 가능해집니다. 발신 계정을
@@ -60,7 +93,23 @@ POST https://graph.microsoft.com/v1.0/sites/{site-id}/permissions
 }
 ```
 
-## 5. Site ID 조회
+## 5. Teams 이름으로 저장 대상 자동 연결
+
+관리자 화면 **설정 → Teams · SharePoint 저장 대상**에서 다음 세 값만 입력합니다.
+
+1. 해당 팀에 실제로 소속된 Microsoft 업무 계정 이메일(UPN)
+2. Teams에 표시되는 팀 이름
+3. Teams에 표시되는 채널 이름
+
+**[찾아서 연결 · 현재 사용]**을 누르면 서버가 `teamId`, `channelId`, `siteId`, `driveId`,
+채널 폴더를 조회하여 목록에 저장하고 바로 활성화합니다. Microsoft 계정의 비밀번호나 개인 토큰은
+입력하거나 저장하지 않습니다. 같은 이름의 팀 또는 채널이 여러 개면 잘못된 위치를 선택하지 않도록
+연결을 중단하고 이름을 고유하게 바꾸라는 오류를 표시합니다.
+
+연결 후 **[테스트 이미지 업로드]**를 누르면 실제 채널의 `_연결테스트` 폴더에 임의 PNG가
+업로드되고, 성공 시 SharePoint 파일 링크가 표시됩니다.
+
+## 5-1. Site ID 직접 조회 (고급/장애 대응용)
 
 브라우저에서 https://developer.microsoft.com/graph/graph-explorer 접속 후 관리자 계정으로 로그인,
 아래 요청을 실행합니다 (1번에서 기록한 사이트 경로 사용):
@@ -70,7 +119,8 @@ GET https://graph.microsoft.com/v1.0/sites/contoso.sharepoint.com:/sites/시공�
 ```
 
 응답의 `id` 값 전체(예: `contoso.sharepoint.com,xxxxxxxx-xxxx-...,yyyyyyyy-yyyy-...`)를
-`SHAREPOINT_SITE_ID`에 그대로 넣습니다. (`SHAREPOINT_DRIVE_ID`는 비워둬도 됩니다 —
+`SHAREPOINT_SITE_ID`에 그대로 넣습니다. 자동 연결이 정상 동작하면 이 과정은 필요하지 않습니다.
+(`SHAREPOINT_DRIVE_ID`는 비워둬도 됩니다 —
 Site ID만으로 해당 사이트의 기본 문서 라이브러리를 자동으로 찾습니다.)
 
 ## 6. 최종 설정 예시

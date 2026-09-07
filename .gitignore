@@ -15,6 +15,13 @@ tmp/
 .env.*
 !.env.example
 
+# 서비스 계정 키 등 자격증명 파일. .env 안에 경로로 가리키는 경우가 있어,
+# 그 파일 자체도 저장소 밖에 있어야 합니다.
+secrets/
+*.key.json
+*-key.json
+service-account*.json
+
 # Editor / OS
 .DS_Store
 Thumbs.db

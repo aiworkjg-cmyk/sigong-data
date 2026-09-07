@@ -9,6 +9,11 @@ import { classifyFile, formatBytes, generateId } from './util';
 export interface SubmissionInput {
   siteId: string;
   constructionType: string;
+  siteType?: string;
+  customerName?: string;
+  customFields?: SiteRecord['customFields'];
+  /** 목록에서 고른 시공건. 직접 입력으로 제출하면 없습니다. */
+  workOrderId?: string;
   /** Roster entries chosen on the form; at least one. */
   technicians: SiteTechnician[];
   /** technicians rendered as one string — folder token and display. */
@@ -58,6 +63,10 @@ export class SubmissionIntake {
     const submission = {
       id: input.siteId,
       constructionType: input.constructionType,
+      siteType: input.siteType,
+      customerName: input.customerName,
+      customFields: input.customFields,
+      workOrderId: input.workOrderId,
       technicians: input.technicians,
       managerName: input.managerName,
       address: input.address,

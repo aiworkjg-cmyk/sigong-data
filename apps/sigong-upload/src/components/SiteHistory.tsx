@@ -13,7 +13,7 @@ import { adminApi } from '../api';
 import { statusMeta } from '../status';
 import { titleStyle } from '../technicians';
 import { typeStyle } from '../constructionTypes';
-import { DateRangeField } from './DateRangeField';
+import { DateRangeInput } from './DateRangeInput';
 import { ROLE_LABELS } from '../types';
 import type { AdminSession, SiteRecord, Technician } from '../types';
 
@@ -175,7 +175,8 @@ export const SiteHistory: React.FC<SiteHistoryProps> = ({ session, onOpenSite })
         <div className="bg-white rounded-xl border border-slate-200 p-4 mb-3 space-y-3.5">
           <div>
             <span className="block text-xs font-bold text-slate-700 mb-1.5">시공일 기간</span>
-            <DateRangeField
+            <DateRangeInput
+              presets
               from={filters.from}
               to={filters.to}
               onChange={({ from, to }) => setFilters({ ...filters, from, to })}

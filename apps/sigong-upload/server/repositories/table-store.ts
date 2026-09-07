@@ -3,9 +3,11 @@ import { DefaultAzureCredential } from '@azure/identity';
 import { config } from '../config';
 import { matchesSiteFilter } from './json-store';
 import { TERMINAL_STATUSES } from '../../src/types';
-import type { Issue, Paged, SiteRecord, UploadLog } from '../../src/types';
+import type { Issue, Paged, SiteRecord, UploadLog, WorkOrder } from '../../src/types';
 import {
   descendingKey,
+  compareWorkOrders,
+  matchesWorkOrderFilter,
   normalizeStoredAdmin,
   type AdminUserRepository,
   type StoredAdminUser,
@@ -19,6 +21,8 @@ import {
   type UploadLogFilter,
   type UploadLogRepository,
   type UploadLogSummary,
+  type WorkOrderFilter,
+  type WorkOrderRepository,
 } from './types';
 
 const SITES_PARTITION = 'SITE';
@@ -26,6 +30,7 @@ const LOGS_PARTITION = 'LOG';
 const ISSUES_PARTITION = 'ISSUE';
 const ADMINS_PARTITION = 'ADMIN';
 const SETTINGS_PARTITION = 'SETTING';
+const ORDERS_PARTITION = 'ORDER';
 const DEFAULT_LIMIT = 50;
 
 function tableName(suffix: string): string {
@@ -100,6 +105,9 @@ function siteToEntity(site: SiteRecord) {
     rowKey: descendingKey(site.createdAt),
     siteId: site.id,
     constructionType: site.constructionType,
+    siteType: site.siteType || '',
+    customerName: site.customerName || '',
+    customFieldsJson: JSON.stringify(site.customFields || []),
     managerName: site.managerName,
     address: site.address,
     constructionDate: site.constructionDate,
@@ -129,6 +137,9 @@ function entityToSite(entity: any): SiteRecord {
   return {
     id: entity.siteId,
     constructionType: entity.constructionType || '',
+    siteType: entity.siteType || undefined,
+    customerName: entity.customerName || undefined,
+    customFields: entity.customFieldsJson ? JSON.parse(entity.customFieldsJson) : [],
     managerName: entity.managerName || '',
     address: entity.address || '',
     constructionDate: entity.constructionDate || '',
@@ -518,9 +529,132 @@ class TableSettingsRepository implements SettingsRepository {
   }
 }
 
+/**
+ * 주문 목록.
+ *
+ * The row key is the 시공예정일 followed by the id, so Table Storage's own
+ * ascending key order is already the order the technician's list wants — no
+ * client-side sort, and a date-range read is a key range rather than a scan.
+ */
+class TableWorkOrderRepository implements WorkOrderRepository {
+  constructor(private readonly client: TableClient) {}
+
+  private rowKey(order: WorkOrder): string {
+    return `${order.scheduledDate || '0000-00-00'}-${order.id}`;
+  }
+
+  async list(filter: WorkOrderFilter = {}): Promise<Paged<WorkOrder>> {
+    const clauses = [`PartitionKey eq '${ORDERS_PARTITION}'`];
+    if (filter.constructionTypes?.length) {
+      clauses.push(
+        `(${filter.constructionTypes
+          .map((type) => `constructionType eq '${escapeOdata(type)}'`)
+          .join(' or ')})`
+      );
+    }
+    if (filter.status) clauses.push(`status eq '${escapeOdata(filter.status)}'`);
+    if (filter.from) clauses.push(`scheduledDate ge '${escapeOdata(filter.from)}'`);
+    if (filter.to) clauses.push(`scheduledDate le '${escapeOdata(filter.to)}'`);
+
+    const page = await readPage(
+      this.client,
+      clauses.join(' and '),
+      filter.limit ?? DEFAULT_LIMIT,
+      filter.cursor,
+      entityToOrder
+    );
+    // Free-text search spans a JSON column, so it cannot be pushed down; it is
+    // applied per page, which can yield a short page but never a wrong cursor.
+    return {
+      ...page,
+      items: page.items
+        .filter((order) => matchesWorkOrderFilter(order, filter))
+        .sort(compareWorkOrders(filter.sort)),
+    };
+  }
+
+  private async findEntity(id: string): Promise<any | null> {
+    const iterator = this.client.listEntities({
+      queryOptions: { filter: odata`PartitionKey eq ${ORDERS_PARTITION} and id eq ${id}` },
+    });
+    for await (const entity of iterator) return entity;
+    return null;
+  }
+
+  async get(id: string): Promise<WorkOrder | null> {
+    const entity = await this.findEntity(id);
+    return entity ? entityToOrder(entity) : null;
+  }
+
+  async findBySourceKey(sourceKey: string): Promise<WorkOrder | null> {
+    const iterator = this.client.listEntities({
+      queryOptions: { filter: odata`PartitionKey eq ${ORDERS_PARTITION} and sourceKey eq ${sourceKey}` },
+    });
+    for await (const entity of iterator) return entityToOrder(entity);
+    return null;
+  }
+
+  async save(order: WorkOrder): Promise<void> {
+    // The scheduled date is part of the row key, so a rescheduled order has to
+    // move rather than be updated in place — otherwise two rows would answer
+    // for one id.
+    const existing = await this.findEntity(order.id);
+    const nextKey = this.rowKey(order);
+    if (existing && existing.rowKey !== nextKey) {
+      await this.client.deleteEntity(ORDERS_PARTITION, existing.rowKey as string);
+    }
+
+    await this.client.upsertEntity(
+      {
+        partitionKey: ORDERS_PARTITION,
+        rowKey: nextKey,
+        id: order.id,
+        constructionType: order.constructionType,
+        status: order.status,
+        scheduledDate: order.scheduledDate,
+        region: order.region,
+        sourceKey: order.sourceKey,
+        payload: JSON.stringify(order),
+      },
+      'Replace'
+    );
+  }
+
+  async remove(id: string): Promise<void> {
+    const entity = await this.findEntity(id);
+    if (entity) await this.client.deleteEntity(ORDERS_PARTITION, entity.rowKey as string);
+  }
+
+  /** 테이블 저장소에는 한 번에 지우는 이점이 없습니다 — 한 건씩 지웁니다. */
+  async removeMany(ids: string[]): Promise<void> {
+    for (const id of ids) await this.remove(id);
+  }
+}
+
+/**
+ * The whole order is kept as one JSON column.
+ *
+ * Only the fields the service actually filters on are promoted to real columns.
+ * An order sheet grows new columns constantly, and a schema that had to be
+ * migrated every time one appeared would be a liability, not a safeguard.
+ */
+function entityToOrder(entity: any): WorkOrder {
+  const parsed = entity.payload ? JSON.parse(entity.payload) : {};
+  return {
+    ...parsed,
+    id: entity.id ?? parsed.id,
+    constructionType: entity.constructionType ?? parsed.constructionType,
+    status: entity.status ?? parsed.status,
+    scheduledDate: entity.scheduledDate ?? parsed.scheduledDate,
+    extras: Array.isArray(parsed.extras) ? parsed.extras : [],
+    editedFields: Array.isArray(parsed.editedFields) ? parsed.editedFields : [],
+  };
+}
+
 export async function createTableRepositories(): Promise<Repositories> {
   const names = {
     sites: tableName('Sites'),
+    workOrders: tableName('WorkOrders'),
     logs: tableName('UploadLogs'),
     issues: tableName('Issues'),
     admins: tableName('Admins'),
@@ -531,6 +665,7 @@ export async function createTableRepositories(): Promise<Repositories> {
 
   return {
     sites: new TableSiteRepository(createClient(names.sites)),
+    workOrders: new TableWorkOrderRepository(createClient(names.workOrders)),
     logs: new TableUploadLogRepository(createClient(names.logs)),
     issues: new TableIssueRepository(createClient(names.issues)),
     admins: new TableAdminUserRepository(createClient(names.admins)),

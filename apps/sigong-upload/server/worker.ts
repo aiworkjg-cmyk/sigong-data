@@ -136,7 +136,7 @@ export class SubmissionWorker {
       // This path never reaches the sync step, so without its own call the
       // channel would hear nothing at all about a submission that failed
       // outright — the case most worth hearing about.
-      void teams.notifyQuietly(this.settings.teamsWebhookUrl(), record);
+      void Promise.all(this.settings.teamsWebhookUrls().map((url) => teams.notifyQuietly(url, record)));
       return;
     }
 
@@ -144,6 +144,9 @@ export class SubmissionWorker {
       {
         id: record.id,
         constructionType: record.constructionType,
+        siteType: record.siteType,
+        customerName: record.customerName,
+        customFields: record.customFields,
         managerName: record.managerName,
         address: record.address,
         constructionDate: record.constructionDate,
@@ -179,7 +182,7 @@ export class SubmissionWorker {
     // Announce only once the outcome is settled. A card sent while retries are
     // still pending would report a shortfall that fixes itself a minute later.
     if (allStored || exhausted) {
-      void teams.notifyQuietly(this.settings.teamsWebhookUrl(), record);
+      void Promise.all(this.settings.teamsWebhookUrls().map((url) => teams.notifyQuietly(url, record)));
     }
 
     if (allStored) {

@@ -88,6 +88,50 @@ az webapp config appsettings set --name $APP --resource-group $RG --settings \
 `/home` 뿐이며, 업로드 임시 파일이 여기 저장되어야 저장 실패 시 관리자가 재동기화할 수
 있습니다.
 
+### 로컬의 .env 는 Azure 로 올라가지 않습니다
+
+로컬에서는 `apps/sigong-upload/.env` 파일을 읽습니다. App Service 에는 그 파일이
+없고, 대신 **구성 > 환경 변수(애플리케이션 설정)** 에 넣은 값이 `process.env` 로
+들어옵니다. 앱 코드는 양쪽을 구분하지 않으므로 **키 이름은 그대로** 두고 값을 옮기면
+됩니다.
+
+`.env` 는 `.gitignore` 에 있어 저장소에 올라가지 않습니다. 배포 파이프라인이
+`.env` 를 복사하는 일도 없습니다 — 의도된 동작입니다.
+
+### 로컬과 달라지는 값
+
+| 설정 | 로컬 | Azure |
+| --- | --- | --- |
+| `DATA_DIR` | 비움 (`apps/sigong-upload/data`) | `/home/data` |
+| `APP_URL` | 비움 (`http://localhost:3000`) | `https://<앱이름>.azurewebsites.net` |
+| `NODE_ENV` | 비움 | `production` |
+| `ADMIN_SECURE_COOKIE` | 비움 (자동 false) | 비움 (자동 true) |
+
+`APP_URL` 은 단순한 표시용이 아닙니다. Microsoft·Google 로그인의 **리디렉션
+주소가 여기서 만들어지므로**, 배포 후에는 각 콘솔에도 운영 주소를 한 번 더 등록해야
+합니다.
+
+- Azure 앱 등록 > 인증: `https://<앱이름>.azurewebsites.net/api/admin/settings/microsoft/callback`
+- Google Cloud > 사용자 인증 정보: `https://<앱이름>.azurewebsites.net/api/admin/work-orders/google/callback`
+
+로컬 주소를 지울 필요는 없습니다. 두 개를 함께 등록해 두면 로컬과 운영 양쪽에서
+모두 동작합니다.
+
+### 서비스 계정 키 (구글시트 연동)
+
+로컬에서는 파일 경로를 적어도 되지만, App Service 에는 그 파일을 둘 자리가 마땅치
+않습니다. **JSON 본문을 한 줄로** 넣으세요.
+
+```bash
+az webapp config appsettings set --name $APP --resource-group $RG --settings \
+  GOOGLE_SERVICE_ACCOUNT_JSON="$(cat ./secrets/baekjosink-sheet-key.json | tr -d '\n')"
+```
+
+키 파일을 저장소에 커밋하지 마세요. `secrets/` 와 `*-key.json` 은 `.gitignore` 에
+있지만, 다른 이름으로 두면 걸리지 않습니다. 운영에서는 아래 Key Vault 참조를 권합니다.
+
+---
+
 대용량 업로드를 위해 Always On 을 켭니다 (B1 이상에서 사용 가능).
 
 ```bash
@@ -277,8 +321,13 @@ az webapp config appsettings set --name $APP --resource-group $RG --settings MAI
 제출 즉시 응답하고 저장은 뒤에서 진행됩니다. 실패 시 자동 재시도 횟수와 간격입니다.
 
 ```bash
-az webapp config appsettings set --name $APP --resource-group $RG --settings WORKER_CONCURRENCY=1 WORKER_MAX_ATTEMPTS=3 WORKER_RETRY_DELAY_MS=30000
+az webapp config appsettings set --name $APP --resource-group $RG --settings WORKER_CONCURRENCY=1 WORKER_MAX_ATTEMPTS=3 WORKER_RETRY_DELAY_MS=30000 MANUAL_RENAME_ENABLED=true MANUAL_RENAME_INTERVAL_SECONDS=60
 ```
+
+`MANUAL_RENAME_INTERVAL_SECONDS=60` 은 SharePoint 전체를 매번 읽는 주기가 아닙니다. Graph
+`delta` 토큰 이후의 변경분만 확인하므로, 변경이 없을 때는 분당 조회 1회 수준입니다.
+앞 단계의 B1 **Always On** 설정이 켜져 있어야 사용자가 사이트를 열지 않은 시간에도 이
+주기 작업이 계속 실행됩니다.
 
 ---
 

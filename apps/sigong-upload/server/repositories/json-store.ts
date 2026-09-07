@@ -2,8 +2,8 @@ import fs from 'fs';
 import path from 'path';
 import { config } from '../config';
 import { TERMINAL_STATUSES } from '../../src/types';
-import type { Issue, Paged, SiteRecord, UploadLog } from '../../src/types';
-import { normalizeStoredAdmin } from './types';
+import type { Issue, Paged, SiteRecord, UploadLog, WorkOrder } from '../../src/types';
+import { compareWorkOrders, matchesWorkOrderFilter, normalizeStoredAdmin } from './types';
 import type {
   AdminUserRepository,
   IssueFilter,
@@ -17,6 +17,8 @@ import type {
   UploadLogFilter,
   UploadLogRepository,
   UploadLogSummary,
+  WorkOrderFilter,
+  WorkOrderRepository,
 } from './types';
 
 const DEFAULT_LIMIT = 50;
@@ -54,7 +56,35 @@ class JsonCollection<T> {
       const temp = `${this.file}.${process.pid}.tmp`;
       await fs.promises.mkdir(path.dirname(this.file), { recursive: true });
       await fs.promises.writeFile(temp, snapshot, 'utf-8');
-      await fs.promises.rename(temp, this.file);
+
+      /*
+       * Windows 에서는 rename 이 EPERM 으로 실패할 때가 있습니다.
+       *
+       * 파일이 손상됐거나 권한이 없어서가 아니라, 그 순간 다른 무언가가 —
+       * 백신 검사, 검색 인덱서, 편집기, 또 다른 개발 서버 — 대상 파일을 잠시
+       * 쥐고 있어서입니다. 곧 풀리는 잠금이므로 몇 번 다시 시도하면 성공합니다.
+       * 여기서 포기하면 동기화 한 회차가 통째로 실패로 기록되는데, 원인은
+       * 데이터와 아무 상관이 없어서 사람이 볼 때 가장 헷갈리는 오류가 됩니다.
+       */
+      let lastError: unknown;
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        try {
+          await fs.promises.rename(temp, this.file);
+          return;
+        } catch (err: any) {
+          if (err?.code !== 'EPERM' && err?.code !== 'EBUSY' && err?.code !== 'EACCES') throw err;
+          lastError = err;
+          await new Promise((resolve) => setTimeout(resolve, 40 * (attempt + 1)));
+        }
+      }
+      // 마지막 수단: 덮어쓰기. 원자적이지는 않지만, 이 시점에는 쓰지 못하는
+      // 것보다 낫습니다 — 잠금이 계속 풀리지 않는 환경이라는 뜻입니다.
+      try {
+        await fs.promises.writeFile(this.file, snapshot, 'utf-8');
+        await fs.promises.unlink(temp).catch(() => {});
+      } catch {
+        throw lastError;
+      }
     });
     return this.writing;
   }
@@ -230,12 +260,52 @@ class JsonSettingsRepository implements SettingsRepository {
   }
 }
 
+/**
+ * 주문 목록. Sorted by 시공예정일 ascending — the technician's list is "what is
+ * coming up", so the nearest date belongs at the top, which is the opposite of
+ * every other collection here.
+ */
+class JsonWorkOrderRepository implements WorkOrderRepository {
+  constructor(private readonly collection: JsonCollection<WorkOrder>) {}
+
+  async list(filter: WorkOrderFilter = {}): Promise<Paged<WorkOrder>> {
+    const matching = this.collection
+      .all()
+      .filter((order) => matchesWorkOrderFilter(order, filter))
+      .sort(compareWorkOrders(filter.sort));
+    return paginate(matching, filter);
+  }
+
+  async get(id: string): Promise<WorkOrder | null> {
+    return this.collection.all().find((order) => order.id === id) ?? null;
+  }
+
+  async findBySourceKey(sourceKey: string): Promise<WorkOrder | null> {
+    return this.collection.all().find((order) => order.sourceKey === sourceKey) ?? null;
+  }
+
+  async save(order: WorkOrder): Promise<void> {
+    await this.collection.upsert(order, (candidate) => candidate.id === order.id);
+  }
+
+  async remove(id: string): Promise<void> {
+    await this.collection.remove((order) => order.id === id);
+  }
+
+  async removeMany(ids: string[]): Promise<void> {
+    if (ids.length === 0) return;
+    const doomed = new Set(ids);
+    await this.collection.remove((order) => doomed.has(order.id));
+  }
+}
+
 export function createJsonRepositories(): Repositories {
   const dir = config.paths.jsonStore;
   fs.mkdirSync(dir, { recursive: true });
 
   return {
     sites: new JsonSiteRepository(new JsonCollection(path.join(dir, 'sites.json'))),
+    workOrders: new JsonWorkOrderRepository(new JsonCollection(path.join(dir, 'work-orders.json'))),
     logs: new JsonUploadLogRepository(new JsonCollection(path.join(dir, 'upload-logs.json'))),
     issues: new JsonIssueRepository(new JsonCollection(path.join(dir, 'issues.json'))),
     admins: new JsonAdminUserRepository(new JsonCollection(path.join(dir, 'admin-users.json'))),

@@ -9,6 +9,8 @@ interface ConstructionTypePickerProps {
   onChange: (type: string) => void;
   disabled?: boolean;
   hasError?: boolean;
+  placeholder?: string;
+  emptyMessage?: string;
 }
 
 /**
@@ -24,6 +26,8 @@ export const ConstructionTypePicker: React.FC<ConstructionTypePickerProps> = ({
   onChange,
   disabled,
   hasError,
+  placeholder = '예: 한샘',
+  emptyMessage = '등록된 시공종류가 없습니다. 관리자에게 문의해 주세요.',
 }) => {
   const [query, setQuery] = useState('');
   const [isOpen, setIsOpen] = useState(false);
@@ -120,7 +124,7 @@ export const ConstructionTypePicker: React.FC<ConstructionTypePickerProps> = ({
             onFocus={() => setIsOpen(true)}
             onKeyDown={handleKeyDown}
             disabled={disabled}
-            placeholder="예: 한샘"
+            placeholder={placeholder}
             autoComplete="off"
             autoCapitalize="off"
             autoCorrect="off"
@@ -137,7 +141,7 @@ export const ConstructionTypePicker: React.FC<ConstructionTypePickerProps> = ({
         <div className="absolute z-20 left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-lg max-h-60 overflow-y-auto">
           {types.length === 0 ? (
             <p className="px-4 py-6 text-center text-xs text-slate-400">
-              등록된 시공종류가 없습니다. 관리자에게 문의해 주세요.
+              {emptyMessage}
             </p>
           ) : matches.length === 0 ? (
             <p className="px-4 py-6 text-center text-xs text-slate-400">

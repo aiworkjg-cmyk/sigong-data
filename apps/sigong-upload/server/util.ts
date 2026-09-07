@@ -77,3 +77,19 @@ export function cleanText(value: unknown, maxLength = 2000): string {
   if (typeof value !== 'string') return '';
   return value.replace(/\s+/g, ' ').trim().slice(0, maxLength);
 }
+
+/**
+ * Escapes text for interpolation into an HTML document.
+ *
+ * Needed by the one route that answers with a page rather than JSON — the
+ * Microsoft sign-in callback — where the message shown to the admin can carry
+ * an error description that came back from Microsoft.
+ */
+export function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}

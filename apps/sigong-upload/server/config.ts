@@ -65,6 +65,12 @@ export const config = {
     retryDelayMs: int(process.env.WORKER_RETRY_DELAY_MS, 30_000),
   },
 
+  manualRename: {
+    /** Delta polling is one cheap Graph call while idle, so one minute is safe on B1. */
+    enabled: bool(process.env.MANUAL_RENAME_ENABLED, true),
+    intervalMs: int(process.env.MANUAL_RENAME_INTERVAL_SECONDS, 60) * 1000,
+  },
+
   mail: {
     /**
      * Mailbox the alert is sent from, via Microsoft Graph using the same app
@@ -86,6 +92,48 @@ export const config = {
     clientSecret: process.env.SHAREPOINT_CLIENT_SECRET?.trim() || '',
     siteId: process.env.SHAREPOINT_SITE_ID?.trim() || '',
     driveId: process.env.SHAREPOINT_DRIVE_ID?.trim() || '',
+  },
+
+  /**
+   * Delegated Microsoft sign-in for the 설정 화면.
+   *
+   * Reuses the SharePoint app registration; only the redirect URI is separate,
+   * and only because the app cannot always tell which public address it is
+   * reached on. Left blank it is derived from APP_URL.
+   */
+  microsoft: {
+    redirectUri: process.env.MICROSOFT_REDIRECT_URI?.trim().replace(/\/$/, '') || '',
+  },
+
+  /**
+   * 이미지 주문서 판독 (Azure AI Document Intelligence).
+   *
+   * 미설정 시 엑셀·CSV·구글시트 연동은 그대로 동작하고, 이미지 업로드만
+   * "OCR 설정이 필요합니다" 로 거절됩니다.
+   */
+  ocr: {
+    endpoint: process.env.AZURE_OCR_ENDPOINT?.trim().replace(/\/$/, '') || '',
+    key: process.env.AZURE_OCR_KEY?.trim() || '',
+    apiVersion: process.env.AZURE_OCR_API_VERSION?.trim() || '2024-11-30',
+  },
+
+  /**
+   * 구글시트 연동용 OAuth 앱.
+   *
+   * 없으면 링크 공유·웹에 게시로 열리는 시트만 읽습니다. 설정하면 로그인한
+   * 사람이 볼 수 있는 모든 시트를 시트별 설정 없이 읽을 수 있습니다.
+   */
+  google: {
+    clientId: process.env.GOOGLE_CLIENT_ID?.trim() || '',
+    clientSecret: process.env.GOOGLE_CLIENT_SECRET?.trim() || '',
+    redirectUri: process.env.GOOGLE_REDIRECT_URI?.trim().replace(/\/$/, '') || '',
+    /**
+     * 서비스 계정 키 — JSON 본문 또는 파일 경로.
+     *
+     * 이 값이 있으면 OAuth 로그인 없이 동작합니다. 동의 화면도, 7일 만료도,
+     * 검증 절차도 없습니다. 대신 시트를 이 계정 주소로 공유해야 합니다.
+     */
+    serviceAccount: process.env.GOOGLE_SERVICE_ACCOUNT_JSON?.trim() || '',
   },
 
   tables: {

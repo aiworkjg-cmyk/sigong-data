@@ -120,6 +120,28 @@ export const SubmissionSuccessView: React.FC<SubmissionSuccessViewProps> = ({
           </div>
 
           {/* 현장 주소 */}
+          {site.siteType && (
+            <div className="bg-slate-50 p-3 rounded-lg border border-slate-100">
+              <span className="text-xs text-slate-500 block mb-0.5">현장종류</span>
+              <span className="font-semibold text-slate-900">{site.siteType}</span>
+            </div>
+          )}
+          {site.customerName && (
+            <div className="bg-slate-50 p-3 rounded-lg border border-slate-100">
+              <span className="text-xs text-slate-500 block mb-0.5">주문자명</span>
+              <span className="font-semibold text-slate-900">{site.customerName}</span>
+            </div>
+          )}
+          {(site.customFields || [])
+            .filter((field) => field.value && field.token !== 'siteType' && field.token !== 'customerName')
+            .map((field) => (
+              <div key={field.id} className="bg-slate-50 p-3 rounded-lg border border-slate-100">
+                <span className="text-xs text-slate-500 block mb-0.5">{field.label}</span>
+                <span className="font-semibold text-slate-900">{field.value}</span>
+              </div>
+            ))}
+
+          {/* 현장 주소 */}
           <div className="bg-slate-50 p-3 rounded-lg border border-slate-100 sm:col-span-2">
             <span className="text-xs text-slate-500 block mb-0.5 flex items-center gap-1">
               <MapPin className="w-3.5 h-3.5 text-slate-400" /> 현장 주소

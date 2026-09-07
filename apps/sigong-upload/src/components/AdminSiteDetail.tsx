@@ -209,6 +209,27 @@ export const AdminSiteDetail: React.FC<AdminSiteDetailProps> = ({
             </p>
           </div>
 
+          {(site.siteType || site.customerName) && (
+            <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-100 sm:col-span-3">
+              <span className="text-xs text-slate-500 block mb-1">현장 분류 / 주문자</span>
+              <p className="font-bold text-slate-900">
+                {[site.siteType, site.customerName].filter(Boolean).join(' · ')}
+              </p>
+            </div>
+          )}
+          {(site.customFields || []).filter((field) => field.value).length > 0 && (
+            <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-100 sm:col-span-3">
+              <span className="text-xs text-slate-500 block mb-2">추가 입력 항목</span>
+              <div className="flex flex-wrap gap-2">
+                {(site.customFields || []).filter((field) => field.value).map((field) => (
+                  <span key={field.id} className="px-2.5 py-1 rounded-lg bg-white border border-slate-200 text-xs">
+                    <strong>{field.label}</strong> · {field.value}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* 특이사항 */}
           <div className="bg-slate-50 p-4 rounded-xl border border-slate-100 sm:col-span-3">
             <span className="text-xs text-slate-500 block mb-1.5 font-medium">특이사항 및 메모</span>

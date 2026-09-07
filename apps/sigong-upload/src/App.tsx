@@ -6,15 +6,20 @@ import type { AdminSession, PublicConfig, SiteFile, SiteRecord, UploadProgressIt
 import { Header } from './components/Header';
 import { Sidebar, type AppView } from './components/Sidebar';
 import { ExternalSubmissionForm } from './components/ExternalSubmissionForm';
+import { MobilePreviewFrame, isPreviewFrame } from './components/MobilePreviewFrame';
 import { UploadProgressModal } from './components/UploadProgressModal';
 import { SubmissionSuccessView } from './components/SubmissionSuccessView';
 import { AdminLogin } from './components/AdminLogin';
 import { SiteHistory } from './components/SiteHistory';
 import { TechnicianManager } from './components/TechnicianManager';
+import { AdminWorkOrders } from './components/AdminWorkOrders';
+import { AdminCalendar } from './components/AdminCalendar';
+import { ConstructionTypeFields } from './components/ConstructionTypeFields';
 import { ConstructionTypeManager } from './components/ConstructionTypeManager';
 import { AdminSiteList } from './components/AdminSiteList';
 import { AdminSiteDetail } from './components/AdminSiteDetail';
 import { AdminUploadLogs } from './components/AdminUploadLogs';
+import { AdminManualAudit } from './components/AdminManualAudit';
 import { AdminIssues } from './components/AdminIssues';
 import { AdminAccounts } from './components/AdminAccounts';
 import { AdminSettings } from './components/AdminSettings';
@@ -28,6 +33,8 @@ const MASTER_ONLY: AppView[] = [
   'admin-logs',
   'admin-issues',
   'admin-settings',
+  'work-orders',
+  'calendar',
   'admin-accounts',
 ];
 
@@ -53,7 +60,10 @@ export default function App() {
 
   // Shell
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+  // 미리보기 틀 안에서는 미리보기를 다시 열 수 없습니다 — 그 안은 이미
+  // 휴대폰 크기의 창이고, 또 한 겹 열면 무한히 겹칩니다.
   const [isMobilePreview, setIsMobilePreview] = useState(false);
+  const previewable = !isPreviewFrame();
   const [previewFile, setPreviewFile] = useState<SiteFile | null>(null);
   const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState(false);
 
@@ -156,11 +166,14 @@ export default function App() {
 
   const handleSiteSubmit = (formData: {
     constructionType: string;
+    fieldValues: Record<string, string>;
     technicianIds: string[];
     address: string;
     constructionDate: string;
     notes: string;
     files: File[];
+    customerName: string;
+    workOrderId: string;
   }) => {
     setIsSubmitting(true);
     setShowProgressModal(true);
@@ -179,10 +192,15 @@ export default function App() {
 
     const body = new FormData();
     body.append('constructionType', formData.constructionType);
+    body.append('fieldValues', JSON.stringify(formData.fieldValues));
     formData.technicianIds.forEach((id) => body.append('technicianIds', id));
     body.append('address', formData.address);
     body.append('constructionDate', formData.constructionDate);
     body.append('notes', formData.notes);
+    if (formData.customerName) body.append('customerName', formData.customerName);
+    // 빈 값이면 목록에 없던 현장을 직접 입력한 것입니다. 서버는 값이 있을 때만
+    // 그 시공건에서 주소·시공일을 다시 읽고, 제출 후 그 건을 완료 처리합니다.
+    if (formData.workOrderId) body.append('workOrderId', formData.workOrderId);
     formData.files.forEach((file) => body.append('files', file));
 
     const xhr = new XMLHttpRequest();
@@ -293,7 +311,9 @@ export default function App() {
           onSubmit={handleSiteSubmit}
           isSubmitting={isSubmitting}
           constructionTypes={publicConfig?.constructionTypes ?? []}
+          constructionTypeConfigs={publicConfig?.constructionTypeConfigs ?? []}
           technicians={publicConfig?.technicians ?? []}
+          submissionOrders={publicConfig?.submissionOrders}
         />
       )}
 
@@ -324,10 +344,34 @@ export default function App() {
         <SiteHistory session={session} onOpenSite={(siteId) => void openSite(siteId)} />
       )}
 
-      {currentView === 'technicians' && session && <TechnicianManager session={session} />}
+      {currentView === 'work-orders' && session && (
+        <AdminWorkOrders session={session} constructionTypes={publicConfig?.constructionTypes ?? []} />
+      )}
 
-      {currentView === 'construction-types' && master && (
-        <ConstructionTypeManager onChanged={loadPublicConfig} />
+      {currentView === 'calendar' && session && (
+        <AdminCalendar session={session} constructionTypes={publicConfig?.constructionTypes ?? []} />
+      )}
+
+      {/* 시공종류별 현장 — 시공종류와 시공기사를 한 화면에서 다룹니다.
+          "누가 어떤 종류의 현장을 맡는가" 는 한 가지 결정이라, 나눠 두면
+          하나를 고칠 때마다 탭을 오가게 됩니다. */}
+      {currentView === 'technicians' && session && (
+        <div className="space-y-2">
+          {master && <ConstructionTypeManager onChanged={loadPublicConfig} />}
+          <div className="max-w-6xl mx-auto px-3 sm:px-6">
+            <ConstructionTypeFields
+              allowedTypes={
+                master ? (publicConfig?.constructionTypes ?? []) : session.constructionTypes
+              }
+            />
+          </div>
+        </div>
+      )}
+
+      {currentView === 'technician-roster' && session && (
+        // 명부를 고치면 제출 화면의 기사 목록이 곧바로 따라야 합니다.
+        // 그러지 않으면 방금 추가한 기사를 현장에서 못 고릅니다.
+        <TechnicianManager session={session} onChanged={loadPublicConfig} />
       )}
 
       {currentView === 'admin-detail' && session && selectedSite && (
@@ -352,7 +396,11 @@ export default function App() {
       )}
 
       {currentView === 'admin-logs' && master && (
-        <AdminUploadLogs onOpenSite={(siteId) => void openSite(siteId)} />
+        <div className="space-y-4">
+          <AdminUploadLogs onOpenSite={(siteId) => void openSite(siteId)} />
+          {/* 앱 밖에서 일어난 변경은 성격이 달라 아래에 따로 둡니다. */}
+          <AdminManualAudit />
+        </div>
       )}
 
       {currentView === 'admin-issues' && master && (
@@ -381,6 +429,7 @@ export default function App() {
         onLogout={() => void handleLogout()}
         onOpenMenu={() => setIsDrawerOpen(true)}
         isMobilePreview={isMobilePreview}
+        previewable={previewable}
         onToggleMobilePreview={() => setIsMobilePreview((prev) => !prev)}
       />
 
@@ -419,20 +468,7 @@ export default function App() {
         )}
 
         <main className="flex-1 min-w-0">
-          {isMobilePreview ? (
-            // A real 390px viewport rather than a scaled screenshot, so the
-            // same breakpoints the phone hits are the ones being previewed.
-            <div className="py-6 px-4 flex flex-col items-center">
-              <p className="mb-3 text-xs font-semibold text-slate-500">
-                모바일 미리보기 · 390 × 780
-              </p>
-              <div className="w-[390px] h-[780px] max-w-full rounded-[2rem] border-8 border-slate-800 bg-slate-100 overflow-y-auto overflow-x-hidden shadow-2xl">
-                {content}
-              </div>
-            </div>
-          ) : (
-            content
-          )}
+          {isMobilePreview ? <MobilePreviewFrame /> : content}
         </main>
       </div>
 

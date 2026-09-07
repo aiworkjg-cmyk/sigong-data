@@ -1,4 +1,6 @@
-import type { AssignableRole, Issue, Paged, SiteRecord, UploadLog } from '../../src/types';
+import type {
+  AssignableRole, Issue, Paged, SiteRecord, UploadLog, WorkOrder, WorkOrderSort, WorkOrderStatus,
+} from '../../src/types';
 
 export interface ListOptions {
   limit?: number;
@@ -97,6 +99,10 @@ export interface StoredAdminUser {
  * migrated account can therefore log in but sees nothing until that happens,
  * which is the safe direction to fail.
  */
+import { normalizeRegionGroup } from '../../src/types';
+
+export { compareWorkOrders } from '../../src/types';
+
 export function normalizeStoredAdmin(raw: any): StoredAdminUser {
   const legacy = raw?.role === 'ADMIN' ? 'COMPANY' : raw?.role === 'STAFF' ? 'TECH' : null;
   const role: AssignableRole =
@@ -142,8 +148,52 @@ export interface PendingSubmission {
   nextAttemptAt: string;
 }
 
+/** Narrows the 주문 목록. Every field is an AND; an omitted field is "any". */
+export interface WorkOrderFilter extends ListOptions {
+  constructionTypes?: string[];
+  status?: WorkOrderStatus;
+  /** Inclusive 시공예정일 range, YYYY-MM-DD. */
+  from?: string;
+  to?: string;
+  region?: string;
+  /** 주문서 시트 이름에서 온 현장종류. 기사 화면에서 한 단계 좁힐 때 씁니다. */
+  siteType?: string;
+  /** 서울 / 수도권 / 충남 … */
+  regionGroup?: string;
+  /** true 면 값이 덜 채워진 건만. 시트에서 미완성으로 들어온 것을 찾을 때. */
+  incompleteOnly?: boolean;
+  /**
+   * 주문서에 적힌 담당 기사. 이름만 비교합니다 — 주문서에는 "유동현 팀장" 처럼
+   * 직함이 붙어 오고 명부에는 이름만 있어서, 정확히 같기를 기대할 수 없습니다.
+   */
+  technicianName?: string;
+  /** Free text across 주소 / 주문자 / 주문번호. */
+  search?: string;
+  /** 정렬 기준. 비우면 원본 시트의 줄 순서입니다. */
+  sort?: WorkOrderSort;
+}
+
+
+export interface WorkOrderRepository {
+  list(filter?: WorkOrderFilter): Promise<Paged<WorkOrder>>;
+  get(id: string): Promise<WorkOrder | null>;
+  /** Looks an order up by its source identity, for re-import and sheet sync. */
+  findBySourceKey(sourceKey: string): Promise<WorkOrder | null>;
+  save(order: WorkOrder): Promise<void>;
+  remove(id: string): Promise<void>;
+  /**
+   * 여러 건을 한 번에 지웁니다.
+   *
+   * 한 건씩 지우면 JSON 저장소가 그때마다 파일 전체를 다시 씁니다. 동기화
+   * 한 번에 백 건이 사라지는 일이 정상적으로 일어나는데, 그러면 파일 쓰기가
+   * 백 번 몰아쳐 Windows 에서 잠금 충돌(EPERM)이 납니다.
+   */
+  removeMany(ids: string[]): Promise<void>;
+}
+
 export interface Repositories {
   sites: SiteRepository;
+  workOrders: WorkOrderRepository;
   logs: UploadLogRepository;
   issues: IssueRepository;
   admins: AdminUserRepository;
@@ -163,4 +213,43 @@ export function descendingKey(at: string | number = Date.now()): string {
   const inverted = 9_999_999_999_999 - safe;
   const suffix = Math.random().toString(36).slice(2, 8);
   return `${String(inverted).padStart(13, '0')}-${suffix}`;
+}
+
+
+/** Shared by the JSON store and the Table store's in-memory second pass. */
+export function matchesWorkOrderFilter(order: WorkOrder, filter: WorkOrderFilter): boolean {
+  if (filter.constructionTypes && !filter.constructionTypes.includes(order.constructionType)) return false;
+  if (filter.status && order.status !== filter.status) return false;
+  if (filter.from && order.scheduledDate < filter.from) return false;
+  if (filter.to && order.scheduledDate > filter.to) return false;
+  if (filter.region && order.region !== filter.region) return false;
+  if (filter.regionGroup && normalizeRegionGroup(order.regionGroup) !== filter.regionGroup) {
+    return false;
+  }
+  if (filter.incompleteOnly && !order.incomplete) return false;
+  if (filter.siteType && (order.siteType || '') !== filter.siteType) return false;
+
+  if (filter.technicianName) {
+    // 양쪽 다 공백을 지우고 "포함" 으로 비교합니다. 주문서의 "유동현 팀장" 과
+    // 명부의 "유동현" 이 같은 사람이라는 것을 알아보려면 이 방법뿐입니다.
+    const squeeze = (value: string) => (value || '').replace(/\s+/g, '');
+    const wanted = squeeze(filter.technicianName);
+    const actual = squeeze(order.technicianName || '');
+    if (!wanted || !actual.includes(wanted)) return false;
+  }
+
+  if (filter.search) {
+    // Whitespace is ignored on both sides: an address is written with different
+    // spacing by every person who types one, and "광명시 하안동" must find a row
+    // stored as "광명시하안동".
+    const squeeze = (value: string) => value.toLowerCase().replace(/\s+/g, '');
+    const needle = squeeze(filter.search);
+    const haystack = squeeze(
+      [order.address, order.customerName, order.orderNumber, order.building, order.phone]
+        .filter(Boolean)
+        .join(' ')
+    );
+    if (!haystack.includes(needle)) return false;
+  }
+  return true;
 }

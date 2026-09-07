@@ -1,7 +1,11 @@
-import React, { useState, useRef } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { TechnicianPicker } from './TechnicianPicker';
+import { WorkOrderPicker } from './WorkOrderPicker';
+import { WorkOrderCalendarPicker } from './WorkOrderCalendarPicker';
+import { DEFAULT_SUBMISSION_ORDER } from '../submission-layout';
+import type { SubmissionFieldKey } from '../submission-layout';
 import { ConstructionTypePicker } from './ConstructionTypePicker';
-import type { Technician } from '../types';
+import type { ConstructionTypeConfig, Technician, WorkOrder } from '../types';
 import {
   Upload,
   Calendar,
@@ -31,17 +35,25 @@ interface SelectedFileItem {
 interface ExternalSubmissionFormProps {
   onSubmit: (formData: {
     constructionType: string;
+    fieldValues: Record<string, string>;
     technicianIds: string[];
     address: string;
     constructionDate: string;
     notes: string;
     files: File[];
+    /** 직접 입력일 때만 채워집니다. 목록에서 골랐으면 그 주문건의 값을 씁니다. */
+    customerName: string;
+    /** 목록에서 고른 시공건. 직접 입력이면 빈 문자열입니다. */
+    workOrderId: string;
   }) => void;
   isSubmitting: boolean;
   /** Selectable 시공종류, served by the API so the list stays configurable. */
   constructionTypes: string[];
+  constructionTypeConfigs: ConstructionTypeConfig[];
   /** Selectable 시공기사 명부, likewise served by the API. */
   technicians: Technician[];
+  /** 시공종류별 입력 항목 차례. 설정에서 정합니다. */
+  submissionOrders?: Record<string, SubmissionFieldKey[]>;
 }
 
 const MAX_FILES = 50;
@@ -68,19 +80,65 @@ export const ExternalSubmissionForm: React.FC<ExternalSubmissionFormProps> = ({
   onSubmit,
   isSubmitting,
   constructionTypes,
+  constructionTypeConfigs,
   technicians,
+  submissionOrders = {},
 }) => {
   const [constructionType, setConstructionType] = useState('');
+  const [fieldValues, setFieldValues] = useState<Record<string, string>>({});
   const [technicianIds, setTechnicianIds] = useState<string[]>([]);
+  const [workOrder, setWorkOrder] = useState<WorkOrder | null>(null);
+  /**
+   * 목록을 건너뛰고 직접 입력하는 중인지.
+   *
+   * 목록이 비어 있을 때 자동으로 켜지지는 않습니다. 주문서 등록이 늦은 것과
+   * 정말로 목록에 없는 현장인 것은 다른 상황이고, 기사가 그 둘을 구분해서
+   * 누르게 해야 관리자가 나중에 무엇을 대조해야 하는지 알 수 있습니다.
+   */
+  const [manualEntry, setManualEntry] = useState(false);
+  /**
+   * 시공건을 고르는 방식. 목록에서 훑거나, 달력에서 날짜를 짚거나.
+   *
+   * 브라우저에 기억시킵니다 — 한 기사는 늘 같은 방식을 쓰는데 화면을 열
+   * 때마다 다시 고르게 하면 그 자체가 매번 한 번의 실수 기회가 됩니다.
+   */
+  const [pickerMode, setPickerMode] = useState<'list' | 'calendar'>(() => {
+    try {
+      return localStorage.getItem('workOrderPickerMode') === 'calendar' ? 'calendar' : 'list';
+    } catch {
+      return 'list';
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('workOrderPickerMode', pickerMode);
+    } catch {
+      // 사생활 보호 모드에서는 저장이 막힙니다. 기억하지 못할 뿐입니다.
+    }
+  }, [pickerMode]);
+  /**
+   * 목록을 거를 시공일.
+   *
+   * 제출되는 constructionDate 와 따로 둡니다. 기사는 "오늘 갈 현장"을 찾으려고
+   * 날짜를 고르는 것이고, 실제로 저장될 시공일은 고른 주문건에서 옵니다.
+   */
+  const [pickDate, setPickDate] = useState(getTodayString());
   const [address, setAddress] = useState('');
+  /** 직접 입력일 때만 받습니다. 주문건을 골랐으면 그 값을 씁니다. */
+  const [customerName, setCustomerName] = useState('');
   const [constructionDate, setConstructionDate] = useState(getTodayString());
   const [notes, setNotes] = useState('');
   const [selectedFiles, setSelectedFiles] = useState<SelectedFileItem[]>([]);
+  /** 목록에서 체크한 파일. 여러 장을 한 번에 빼낼 때 씁니다. */
+  const [pickedFiles, setPickedFiles] = useState<Set<string>>(new Set());
   
   // Validation errors
   const [errors, setErrors] = useState<{
     constructionType?: string;
+    customFields?: Record<string, string>;
     technicians?: string;
+    customerName?: string;
     address?: string;
     constructionDate?: string;
     files?: string;
@@ -88,6 +146,9 @@ export const ExternalSubmissionForm: React.FC<ExternalSubmissionFormProps> = ({
 
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const selectedConfig = constructionTypeConfigs.find(
+    (entry) => entry.constructionType === constructionType
+  );
 
   // Validate single or multiple files against rules (max 50, max 100MB per file, photo/video type)
   const processIncomingFiles = (incomingList: FileList | File[]) => {
@@ -172,7 +233,37 @@ export const ExternalSubmissionForm: React.FC<ExternalSubmissionFormProps> = ({
     }
   };
 
+  const toggleFilePick = (id: string) =>
+    setPickedFiles((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  /** 고른 것만 지웁니다. 미리보기 주소도 함께 반납해 메모리를 흘리지 않습니다. */
+  const handleRemovePicked = () => {
+    setSelectedFiles((prev) => {
+      for (const item of prev) {
+        if (pickedFiles.has(item.id) && item.previewUrl) URL.revokeObjectURL(item.previewUrl);
+      }
+      return prev.filter((item) => !pickedFiles.has(item.id));
+    });
+    setPickedFiles(new Set());
+    setErrors((prev) => {
+      const copy = { ...prev };
+      delete copy.files;
+      return copy;
+    });
+  };
+
   const handleRemoveFile = (id: string) => {
+    setPickedFiles((current) => {
+      if (!current.has(id)) return current;
+      const next = new Set(current);
+      next.delete(id);
+      return next;
+    });
     setSelectedFiles((prev) => {
       const target = prev.find((f) => f.id === id);
       if (target && target.previewUrl) {
@@ -193,6 +284,7 @@ export const ExternalSubmissionForm: React.FC<ExternalSubmissionFormProps> = ({
       if (f.previewUrl) URL.revokeObjectURL(f.previewUrl);
     });
     setSelectedFiles([]);
+    setPickedFiles(new Set());
     setErrors((prev) => {
       const copy = { ...prev };
       delete copy.files;
@@ -210,9 +302,23 @@ export const ExternalSubmissionForm: React.FC<ExternalSubmissionFormProps> = ({
     if (!constructionType) {
       errs.constructionType = '시공종류를 선택해 주세요.';
     }
+    for (const field of selectedConfig?.fields || []) {
+      if (field.required && !(fieldValues[field.id] || '').trim()) {
+        errs.customFields = { ...(errs.customFields || {}), [field.id]: `${field.label} 항목을 입력해 주세요.` };
+      }
+    }
 
-    if (!address.trim()) {
+    if (!workOrder && !manualEntry) {
+      errs.address = '시공건을 목록에서 선택해 주세요.';
+    } else if (!address.trim()) {
       errs.address = '현장 주소를 입력해 주세요.';
+    }
+
+    // 직접 입력일 때만 필수입니다. 목록에서 고른 건은 주문서에 적힌 주문자를
+    // 그대로 쓰므로 다시 물을 이유가 없고, 직접 입력한 현장은 주문자명이
+    // 없으면 나중에 어느 건인지 특정할 방법이 사라집니다.
+    if (manualEntry && !workOrder && !customerName.trim()) {
+      errs.customerName = '주문자명을 입력해 주세요.';
     }
 
     if (!constructionDate) {
@@ -227,6 +333,402 @@ export const ExternalSubmissionForm: React.FC<ExternalSubmissionFormProps> = ({
     return Object.keys(errs).length === 0;
   };
 
+  /**
+   * 목록에서 고른 값을 폼에 채웁니다.
+   *
+   * 서버도 같은 일을 한 번 더 합니다 — 여기서 채운 값은 화면에 보여 주기 위한
+   * 것이고, 실제로 저장되는 주소·날짜는 서버가 시공건에서 다시 읽습니다.
+   * 브라우저가 보낸 값을 믿으면 목록으로 오타를 없앤 의미가 사라집니다.
+   */
+  const chooseWorkOrder = (order: WorkOrder) => {
+    setWorkOrder(order);
+    setManualEntry(false);
+    setAddress(order.address);
+    setCustomerName(order.customerName || '');
+    setConstructionDate(order.scheduledDate);
+    setErrors((prev) => ({ ...prev, address: undefined, constructionDate: undefined }));
+  };
+
+  const clearWorkOrder = () => {
+    setWorkOrder(null);
+    setAddress('');
+    setCustomerName('');
+    setConstructionDate(getTodayString());
+  };
+
+  /** 이 시공종류의 입력 항목 차례. 정해 두지 않았으면 기본 차례. */
+  const submissionOrder = submissionOrders[constructionType] ?? DEFAULT_SUBMISSION_ORDER;
+
+  /** 직접 입력 중일 때만 나오는 항목인지. */
+  const manualOnly = manualEntry && !workOrder;
+
+  /**
+   * 목록을 한 단계 더 좁힐 현장종류.
+   *
+   * 업체별 입력 항목 중 폴더 토큰이 현장종류인 칸의 값입니다. 이름이 아니라
+   * 토큰으로 찾는 이유는, 라벨은 업체가 자유롭게 바꾸지만 토큰은 폴더 규칙이
+   * 참조하므로 바뀌지 않기 때문입니다.
+   */
+  const siteTypeField = (selectedConfig?.fields || []).find(
+    (field) => field.token === '현장종류' || field.token === 'siteType' || field.label === '현장종류'
+  );
+  const pickedSiteType = fieldValues[siteTypeField?.id ?? ''] || '';
+
+  /**
+   * 현장종류를 아직 고르지 않아 뒷 항목을 감춰 두는 중인지.
+   *
+   * 한 시공종류 안에서도 현장(거래처)마다 주문건 목록이 완전히 다릅니다.
+   * 현장종류를 정하지 않은 채 날짜와 목록을 먼저 펼치면, 기사는 남의 현장까지
+   * 섞인 목록을 훑게 되고 그 상태에서 고른 건은 대개 틀립니다. 그래서 이
+   * 한 칸을 먼저 받고, 정해진 뒤에 나머지를 엽니다.
+   *
+   * 현장종류 항목 자체가 없는 업체(단일 현장)는 감출 것이 없으므로 바로
+   * 전부 보여 줍니다.
+   */
+  const waitingForSiteType = Boolean(siteTypeField) && !pickedSiteType;
+
+  /** 각 입력 항목. 그리는 차례는 설정이 정하므로 여기서는 순서를 갖지 않습니다. */
+  const section: Record<SubmissionFieldKey, React.ReactNode> = {
+    /* 시공종류 — 고정 목록에서 고릅니다. 이 값이 문서 라이브러리의 폴더 이름이
+       되기 때문에 손으로 치게 두지 않습니다. */
+    constructionType: (
+      <div>
+        <label className="block text-sm font-semibold text-slate-800 mb-1.5">
+          시공종류 <span className="text-rose-500">*</span>
+        </label>
+        <ConstructionTypePicker
+          types={constructionTypes}
+          value={constructionType}
+          onChange={(type) => {
+            setConstructionType(type);
+            setFieldValues({});
+            setErrors((prev) => ({ ...prev, constructionType: undefined }));
+            // 시공건은 시공종류에 매여 있으므로 함께 비웁니다.
+            setWorkOrder(null);
+            setManualEntry(false);
+          }}
+          disabled={isSubmitting}
+          hasError={Boolean(errors.constructionType)}
+        />
+        {errors.constructionType && (
+          <p className="mt-1.5 text-xs text-rose-600 flex items-center gap-1">
+            <AlertTriangle className="w-3.5 h-3.5" />
+            {errors.constructionType}
+          </p>
+        )}
+      </div>
+    ),
+
+    /* 현장종류를 비롯한 업체별 입력 항목. */
+    siteFields: (
+      <>
+        {(selectedConfig?.fields || []).map((field) => {
+          const fieldError = errors.customFields?.[field.id];
+          return (
+            <div key={field.id}>
+              <label className="block text-sm font-semibold text-slate-800 mb-1.5">
+                {field.label} {field.required && <span className="text-rose-500">*</span>}
+              </label>
+              {field.inputType === 'select' ? (
+                <ConstructionTypePicker
+                  types={field.options}
+                  value={fieldValues[field.id] || ''}
+                  onChange={(value) => {
+                    setFieldValues((current) => ({ ...current, [field.id]: value }));
+                    setErrors((current) => ({ ...current, customFields: { ...(current.customFields || {}), [field.id]: '' } }));
+                  }}
+                  disabled={isSubmitting}
+                  hasError={Boolean(fieldError)}
+                  placeholder={`${field.label} 검색`}
+                  emptyMessage={`등록된 ${field.label} 선택값이 없습니다.`}
+                />
+              ) : (
+                <input
+                  type="text"
+                  value={fieldValues[field.id] || ''}
+                  onChange={(event) => {
+                    setFieldValues((current) => ({ ...current, [field.id]: event.target.value }));
+                    setErrors((current) => ({ ...current, customFields: { ...(current.customFields || {}), [field.id]: '' } }));
+                  }}
+                  placeholder={`${field.label} 입력`}
+                  disabled={isSubmitting}
+                  className={`w-full px-4 py-2.5 rounded-lg border text-base sm:text-sm focus:outline-hidden focus:ring-2 ${fieldError ? 'border-rose-300 focus:ring-rose-200' : 'border-slate-300 focus:border-blue-500 focus:ring-blue-100'}`}
+                />
+              )}
+              {fieldError && <p className="mt-1.5 text-xs text-rose-600">{fieldError}</p>}
+            </div>
+          );
+        })}
+      </>
+    ),
+
+    /* 목록을 거를 시공일. 실제로 저장되는 시공일은 고른 주문건에서 옵니다. */
+    // 달력 방식에서는 날짜를 달력에서 고르므로 이 칸이 필요 없습니다.
+    pickDate: workOrder || manualEntry || pickerMode === 'calendar' ? null : (
+      <div>
+        <label className="block text-sm font-semibold text-slate-800 mb-1.5">시공일</label>
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            type="date"
+            value={pickDate}
+            onChange={(event) => setPickDate(event.target.value)}
+            className="flex-1 min-w-[150px] px-3 py-2.5 rounded-lg border border-slate-300 text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+          <button
+            type="button"
+            onClick={() => setPickDate('')}
+            className={`px-3 py-2.5 rounded-lg border text-xs font-semibold ${
+              pickDate ? 'border-slate-300 text-slate-600' : 'border-blue-400 bg-blue-50 text-blue-700'
+            }`}
+          >
+            전체 날짜
+          </button>
+        </div>
+      </div>
+    ),
+
+    /* 그 날짜의 주문건 목록. */
+    workOrder: (
+      <div>
+        <div className="flex items-center justify-between gap-2 mb-1.5">
+          <label className="block text-sm font-semibold text-slate-800">
+            시공건 선택 <span className="text-rose-500">*</span>
+          </label>
+          {/* 고르는 방식은 사람마다 갈립니다 — 날짜로 기억하는 기사와 현장
+              이름으로 기억하는 기사가 있어서, 한쪽으로 정해 주면 나머지
+              절반이 매번 헤맵니다. */}
+          {!workOrder && !manualEntry && (
+            <div className="flex rounded-lg border border-slate-300 overflow-hidden text-xs font-bold">
+              {([
+                ['list', '목록'],
+                ['calendar', '달력'],
+              ] as const).map(([mode, label]) => (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => setPickerMode(mode)}
+                  className={`px-2.5 py-1.5 ${
+                    pickerMode === mode ? 'bg-blue-600 text-white' : 'text-slate-600'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        {manualEntry && !workOrder ? (
+          <div className="flex items-center gap-2 p-3 rounded-xl border border-amber-200 bg-amber-50 text-xs text-amber-800">
+            <AlertTriangle className="w-4 h-4 shrink-0" />
+            <span className="flex-1">
+              목록에 없는 현장으로 직접 입력하는 중입니다. 아래 주문자명·현장주소를 채워 주세요.
+            </span>
+            <button
+              type="button"
+              onClick={() => setManualEntry(false)}
+              className="shrink-0 px-2.5 py-1.5 rounded-lg border border-amber-300 bg-white font-bold"
+            >
+              목록으로
+            </button>
+          </div>
+        ) : pickerMode === 'calendar' ? (
+          <WorkOrderCalendarPicker
+            constructionType={constructionType}
+            siteType={pickedSiteType}
+            selected={workOrder}
+            onSelect={chooseWorkOrder}
+            onClear={clearWorkOrder}
+            onManualEntry={() => {
+              setManualEntry(true);
+              clearWorkOrder();
+            }}
+          />
+        ) : (
+          <WorkOrderPicker
+            constructionType={constructionType}
+            siteType={pickedSiteType}
+            scheduledDate={pickDate}
+            selected={workOrder}
+            onSelect={chooseWorkOrder}
+            onClear={clearWorkOrder}
+            onManualEntry={() => {
+              setManualEntry(true);
+              clearWorkOrder();
+            }}
+          />
+        )}
+        {errors.address && !workOrder && !manualEntry && (
+          <p className="mt-1.5 text-xs text-rose-600 flex items-center gap-1">
+            <AlertTriangle className="w-3.5 h-3.5" />
+            {errors.address}
+          </p>
+        )}
+      </div>
+    ),
+
+    /* 실제로 다녀온 기사. 주문서의 예정 기사와 달라도 됩니다. */
+    technicians: (
+      <div>
+        <label className="block text-sm font-semibold text-slate-800 mb-1.5">
+          시공기사 <span className="text-rose-500">*</span>
+          <span className="ml-1.5 text-xs font-normal text-slate-400">(여러 명 선택 가능)</span>
+        </label>
+        {workOrder?.technicianName && (
+          <p className="mb-1.5 text-xs text-slate-500">
+            주문서 예정 기사: <strong className="text-slate-700">{workOrder.technicianName}</strong>
+            <span className="ml-1 text-slate-400">— 실제로 간 기사가 달라도 됩니다.</span>
+          </p>
+        )}
+        <TechnicianPicker
+          technicians={technicians}
+          expectedName={workOrder?.technicianName}
+          selectedIds={technicianIds}
+          onChange={(ids) => {
+            setTechnicianIds(ids);
+            if (errors.technicians) {
+              setErrors((prev) => ({ ...prev, technicians: undefined }));
+            }
+          }}
+          disabled={isSubmitting}
+          hasError={Boolean(errors.technicians)}
+        />
+        {errors.technicians && (
+          <p className="mt-1.5 text-xs text-rose-600 flex items-center gap-1">
+            <AlertTriangle className="w-3.5 h-3.5" />
+            {errors.technicians}
+          </p>
+        )}
+      </div>
+    ),
+
+    /* 아래 셋은 직접 입력일 때만 나옵니다. 주문건을 골랐으면 그 값이 이미
+       정확하고, 같은 것을 다시 묻는 칸이 있으면 표기가 갈라집니다. */
+    customerName: !manualOnly ? null : (
+      <div>
+        <label htmlFor="input-customer" className="block text-sm font-semibold text-slate-800 mb-1.5">
+          주문자명 <span className="text-rose-500">*</span>
+        </label>
+        <input
+          id="input-customer"
+          type="text"
+          value={customerName}
+          onChange={(event) => {
+            setCustomerName(event.target.value);
+            if (errors.customerName) setErrors((prev) => ({ ...prev, customerName: undefined }));
+          }}
+          placeholder="예: 홍길동"
+          disabled={isSubmitting}
+          className={`w-full px-4 py-2.5 rounded-lg border text-base sm:text-sm focus:outline-hidden focus:ring-2 ${
+            errors.customerName
+              ? 'border-rose-300 focus:ring-rose-200 bg-rose-50/30'
+              : 'border-slate-300 focus:border-blue-500 focus:ring-blue-100'
+          }`}
+        />
+        {errors.customerName && (
+          <p className="mt-1.5 text-xs text-rose-600 flex items-center gap-1">
+            <AlertTriangle className="w-3.5 h-3.5" />
+            {errors.customerName}
+          </p>
+        )}
+      </div>
+    ),
+
+    address: !manualOnly ? null : (
+      <div>
+        <label htmlFor="input-address" className="block text-sm font-semibold text-slate-800 mb-1.5">
+          현장 주소 <span className="text-rose-500">*</span>
+        </label>
+        <div className="relative">
+          <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+            <MapPin className="w-4 h-4" />
+          </div>
+          <input
+            id="input-address"
+            type="text"
+            value={address}
+            onChange={(e) => {
+              setAddress(e.target.value);
+              if (errors.address) setErrors((prev) => ({ ...prev, address: undefined }));
+            }}
+            placeholder="예: 경기 광명시 하안로 60 광명SK테크노파크 A동 702호"
+            className={`w-full pl-10 pr-4 py-2.5 rounded-lg border text-base sm:text-sm focus:outline-hidden focus:ring-2 transition-all ${
+              errors.address
+                ? 'border-rose-300 focus:ring-rose-200 bg-rose-50/30'
+                : 'border-slate-300 focus:border-blue-500 focus:ring-blue-100'
+            }`}
+            disabled={isSubmitting}
+          />
+        </div>
+        {errors.address && (
+          <p className="mt-1.5 text-xs text-rose-600 flex items-center gap-1">
+            <AlertTriangle className="w-3.5 h-3.5" />
+            {errors.address}
+          </p>
+        )}
+      </div>
+    ),
+
+    constructionDate: !manualOnly ? null : (
+      <div>
+        <div className="flex items-center justify-between mb-1.5">
+          <label htmlFor="input-construction-date" className="block text-sm font-semibold text-slate-800">
+            시공일 <span className="text-rose-500">*</span>
+          </label>
+          <button
+            type="button"
+            onClick={() => setDatePreset(-1)}
+            className="text-xs px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-md transition-colors font-medium"
+          >
+            어제 날짜로
+          </button>
+        </div>
+        <div className="relative">
+          <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+            <Calendar className="w-4 h-4" />
+          </div>
+          <input
+            id="input-construction-date"
+            type="date"
+            value={constructionDate}
+            onChange={(e) => {
+              setConstructionDate(e.target.value);
+              if (errors.constructionDate) setErrors((prev) => ({ ...prev, constructionDate: undefined }));
+            }}
+            className={`w-full pl-10 pr-4 py-2.5 rounded-lg border text-base sm:text-sm focus:outline-hidden focus:ring-2 transition-all ${
+              errors.constructionDate
+                ? 'border-rose-300 focus:ring-rose-200 bg-rose-50/30'
+                : 'border-slate-300 focus:border-blue-500 focus:ring-blue-100'
+            }`}
+            disabled={isSubmitting}
+          />
+        </div>
+        {errors.constructionDate && (
+          <p className="mt-1.5 text-xs text-rose-600 flex items-center gap-1">
+            <AlertTriangle className="w-3.5 h-3.5" />
+            {errors.constructionDate}
+          </p>
+        )}
+      </div>
+    ),
+
+    notes: (
+      <div>
+        <label htmlFor="textarea-notes" className="block text-sm font-semibold text-slate-800 mb-1.5">
+          특이사항 <span className="text-xs text-slate-400 font-normal">(선택 입력)</span>
+        </label>
+        <textarea
+          id="textarea-notes"
+          rows={3}
+          value={notes}
+          onChange={(e) => setNotes(e.target.value)}
+          placeholder="예: 싱크대 상판 자재를 현장에서 변경함"
+          className="w-full px-4 py-2.5 rounded-lg border border-slate-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 text-base sm:text-sm focus:outline-hidden transition-all"
+          disabled={isSubmitting}
+        />
+      </div>
+    ),
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (isSubmitting) return;
@@ -239,11 +741,14 @@ export const ExternalSubmissionForm: React.FC<ExternalSubmissionFormProps> = ({
 
     onSubmit({
       constructionType,
+      fieldValues,
       technicianIds,
       address: address.trim(),
       constructionDate,
       notes: notes.trim(),
+      customerName: customerName.trim(),
       files: selectedFiles.map((item) => item.file),
+      workOrderId: workOrder?.id || '',
     });
   };
 
@@ -287,162 +792,32 @@ export const ExternalSubmissionForm: React.FC<ExternalSubmissionFormProps> = ({
             <span className="text-xs text-rose-600 font-medium">* 필수 입력 항목</span>
           </div>
 
+          {/* 항목 차례는 설정에서 정합니다. 왜 순서를 코드에 박지 않는지는
+              submission-layout.ts 에 적어 두었습니다. */}
           <div className="space-y-5">
-            {/* 0. 시공종류 — chosen from a fixed list, never typed, because the
-                 value becomes a folder name in the document library. */}
-            <div>
-              <label className="block text-sm font-semibold text-slate-800 mb-1.5">
-                시공종류 <span className="text-rose-500">*</span>
-              </label>
-              <ConstructionTypePicker
-                types={constructionTypes}
-                value={constructionType}
-                onChange={(type) => {
-                  setConstructionType(type);
-                  setErrors((prev) => ({ ...prev, constructionType: undefined }));
-                }}
-                disabled={isSubmitting}
-                hasError={Boolean(errors.constructionType)}
-              />
-              {errors.constructionType && (
-                <p className="mt-1.5 text-xs text-rose-600 flex items-center gap-1">
-                  <AlertTriangle className="w-3.5 h-3.5" />
-                  {errors.constructionType}
-                </p>
-              )}
-            </div>
+            {section.constructionType}
+            {constructionType &&
+              submissionOrder
+                .filter((key: SubmissionFieldKey) => key !== 'constructionType')
+                // 현장종류를 고르기 전에는 그 칸까지만 보여 줍니다.
+                .filter((key: SubmissionFieldKey) => !waitingForSiteType || key === 'siteFields')
+                .map((key: SubmissionFieldKey) => (
+                  <React.Fragment key={key}>{section[key]}</React.Fragment>
+                ))}
 
-            {/* 1. 시공기사 — chosen from the roster, several allowed. */}
-            <div>
-              <label className="block text-sm font-semibold text-slate-800 mb-1.5">
-                시공기사 <span className="text-rose-500">*</span>
-                <span className="ml-1.5 text-xs font-normal text-slate-400">
-                  (여러 명 선택 가능)
+            {waitingForSiteType && (
+              <p className="flex items-start gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs text-slate-600">
+                <Info className="w-4 h-4 shrink-0 mt-0.5 text-slate-400" />
+                <span>
+                  <strong>{siteTypeField?.label || '현장종류'}</strong>를 고르면 나머지 입력
+                  항목과 그 현장의 시공건 목록이 나옵니다.
                 </span>
-              </label>
-              <TechnicianPicker
-                technicians={technicians}
-                selectedIds={technicianIds}
-                onChange={(ids) => {
-                  setTechnicianIds(ids);
-                  if (errors.technicians) {
-                    setErrors((prev) => ({ ...prev, technicians: undefined }));
-                  }
-                }}
-                disabled={isSubmitting}
-                hasError={Boolean(errors.technicians)}
-              />
-              {errors.technicians && (
-                <p className="mt-1.5 text-xs text-rose-600 flex items-center gap-1">
-                  <AlertTriangle className="w-3.5 h-3.5" />
-                  {errors.technicians}
-                </p>
-              )}
-            </div>
-
-            {/* 2. 현장 주소 */}
-            <div>
-              <label htmlFor="input-address" className="block text-sm font-semibold text-slate-800 mb-1.5">
-                현장 주소 <span className="text-rose-500">*</span>
-              </label>
-              <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
-                  <MapPin className="w-4 h-4" />
-                </div>
-                <input
-                  id="input-address"
-                  type="text"
-                  value={address}
-                  onChange={(e) => {
-                    setAddress(e.target.value);
-                    if (errors.address) {
-                      setErrors((prev) => ({ ...prev, address: undefined }));
-                    }
-                  }}
-                  placeholder="예: 경기 광명시 하안로 60 광명SK테크노파크 A동 702호"
-                  className={`w-full pl-10 pr-4 py-2.5 rounded-lg border text-sm focus:outline-hidden focus:ring-2 transition-all ${
-                    errors.address
-                      ? 'border-rose-300 focus:ring-rose-200 bg-rose-50/30'
-                      : 'border-slate-300 focus:border-blue-500 focus:ring-blue-100'
-                  }`}
-                  disabled={isSubmitting}
-                />
-              </div>
-              {errors.address && (
-                <p className="mt-1.5 text-xs text-rose-600 flex items-center gap-1">
-                  <AlertTriangle className="w-3.5 h-3.5" />
-                  {errors.address}
-                </p>
-              )}
-            </div>
-
-            {/* 3. 시공일 (달력 선택 방식) */}
-            <div>
-              <div className="flex items-center justify-between mb-1.5">
-                <label htmlFor="input-construction-date" className="block text-sm font-semibold text-slate-800">
-                  시공일 (달력 선택) <span className="text-rose-500">*</span>
-                </label>
-                {/* Quick Presets */}
-                <button
-                  type="button"
-                  onClick={() => setDatePreset(-1)}
-                  className="text-xs px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-md transition-colors font-medium"
-                >
-                  어제 날짜로 업로드
-                </button>
-              </div>
-
-              <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
-                  <Calendar className="w-4 h-4" />
-                </div>
-                <input
-                  id="input-construction-date"
-                  type="date"
-                  value={constructionDate}
-                  onChange={(e) => {
-                    setConstructionDate(e.target.value);
-                    if (errors.constructionDate) {
-                      setErrors((prev) => ({ ...prev, constructionDate: undefined }));
-                    }
-                  }}
-                  className={`w-full pl-10 pr-4 py-2.5 rounded-lg border text-sm focus:outline-hidden focus:ring-2 transition-all ${
-                    errors.constructionDate
-                      ? 'border-rose-300 focus:ring-rose-200 bg-rose-50/30'
-                      : 'border-slate-300 focus:border-blue-500 focus:ring-blue-100'
-                  }`}
-                  disabled={isSubmitting}
-                />
-              </div>
-              <p className="mt-1 text-xs text-slate-500">
-                선택된 시공일: <span className="font-semibold text-slate-700">{constructionDate || '미선택'}</span>
               </p>
-              {errors.constructionDate && (
-                <p className="mt-1.5 text-xs text-rose-600 flex items-center gap-1">
-                  <AlertTriangle className="w-3.5 h-3.5" />
-                  {errors.constructionDate}
-                </p>
-              )}
-            </div>
-
-            {/* 4. 특이사항 */}
-            <div>
-              <label htmlFor="textarea-notes" className="block text-sm font-semibold text-slate-800 mb-1.5">
-                특이사항 <span className="text-xs text-slate-400 font-normal">(선택 입력)</span>
-              </label>
-              <textarea
-                id="textarea-notes"
-                rows={3}
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-                placeholder="예: 싱크대 상판 자재를 현장에서 변경함"
-                className="w-full px-4 py-2.5 rounded-lg border border-slate-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 text-sm focus:outline-hidden transition-all"
-                disabled={isSubmitting}
-              />
-            </div>
+            )}
           </div>
         </div>
 
+        {constructionType && !waitingForSiteType && <>
         {/* Card 2: 사진 및 동영상 업로드 */}
         <div className="bg-white rounded-xl border border-slate-200 p-6 sm:p-7 shadow-xs">
           <div className="border-b border-slate-100 pb-4 mb-5 flex flex-wrap items-center justify-between gap-2">
@@ -545,19 +920,90 @@ export const ExternalSubmissionForm: React.FC<ExternalSubmissionFormProps> = ({
           {/* Selected Files Grid Preview */}
           {selectedFiles.length > 0 && (
             <div className="mt-6">
-              <div className="flex items-center justify-between mb-3 text-xs text-slate-600">
+              <div className="flex items-center justify-between mb-2 text-xs text-slate-600">
                 <span className="font-semibold text-slate-800">
                   첨부 목록 (사진 {photoCount}개, 영상 {videoCount}개, 총 {formatBytes(totalSizeBytes)})
                 </span>
                 <span>{selectedFiles.length}개 파일 준비됨</span>
               </div>
 
+              {/*
+               * 골라서 지우기.
+               *
+               * 낱개 삭제만 있으면 잘못 고른 사진 열 장을 지우는 데 열 번을
+               * 눌러야 하고, 그 사이 목록이 계속 밀려서 엉뚱한 것을 지우게
+               * 됩니다. 현장에서 장갑 낀 손으로 하는 일이라 더 그렇습니다.
+               */}
+              <div className="flex flex-wrap items-center gap-2 mb-3">
+                <label className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-600">
+                  <input
+                    type="checkbox"
+                    checked={pickedFiles.size > 0 && pickedFiles.size === selectedFiles.length}
+                    ref={(node) => {
+                      if (node) {
+                        node.indeterminate =
+                          pickedFiles.size > 0 && pickedFiles.size < selectedFiles.length;
+                      }
+                    }}
+                    onChange={() =>
+                      setPickedFiles(
+                        pickedFiles.size === selectedFiles.length
+                          ? new Set()
+                          : new Set(selectedFiles.map((item) => item.id))
+                      )
+                    }
+                    className="w-4 h-4 accent-blue-600"
+                  />
+                  전체 선택
+                </label>
+
+                {pickedFiles.size > 0 && (
+                  <>
+                    <span className="text-xs font-bold text-blue-700">{pickedFiles.size}개 선택됨</span>
+                    <button
+                      type="button"
+                      onClick={handleRemovePicked}
+                      disabled={isSubmitting}
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-rose-600 text-white text-xs font-bold disabled:opacity-40"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      선택 삭제
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPickedFiles(new Set())}
+                      className="px-2 py-1.5 text-xs font-semibold text-slate-500 underline"
+                    >
+                      선택 해제
+                    </button>
+                  </>
+                )}
+              </div>
+
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 max-h-96 overflow-y-auto p-1">
-                {selectedFiles.map((item, index) => (
+                {selectedFiles.map((item, index) => {
+                  const picked = pickedFiles.has(item.id);
+                  return (
                   <div
                     key={item.id}
-                    className="relative group rounded-lg border border-slate-200 bg-white p-2 flex flex-col justify-between shadow-2xs hover:shadow-xs transition-shadow"
+                    onClick={() => toggleFilePick(item.id)}
+                    className={`relative group rounded-lg border-2 bg-white p-2 flex flex-col justify-between shadow-2xs transition-all cursor-pointer ${
+                      picked
+                        ? 'border-blue-600 ring-2 ring-blue-200'
+                        : 'border-slate-200 hover:shadow-xs'
+                    }`}
                   >
+                    {/* 카드 어디를 눌러도 선택됩니다 — 작은 체크박스만 노려
+                        누르게 하면 현장에서 자꾸 빗나갑니다. */}
+                    <input
+                      type="checkbox"
+                      checked={picked}
+                      onChange={() => toggleFilePick(item.id)}
+                      onClick={(event) => event.stopPropagation()}
+                      aria-label={`${item.file.name} 선택`}
+                      className="absolute bottom-2 right-2 z-10 w-5 h-5 accent-blue-600"
+                    />
+
                     {/* Thumbnail / Icon */}
                     <div className="aspect-video w-full rounded-md bg-slate-100 overflow-hidden relative flex items-center justify-center mb-2">
                       {item.isImage && item.previewUrl ? (
@@ -602,7 +1048,8 @@ export const ExternalSubmissionForm: React.FC<ExternalSubmissionFormProps> = ({
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}
@@ -643,6 +1090,7 @@ export const ExternalSubmissionForm: React.FC<ExternalSubmissionFormProps> = ({
             )}
           </button>
         </div>
+        </>}
       </form>
     </div>
   );

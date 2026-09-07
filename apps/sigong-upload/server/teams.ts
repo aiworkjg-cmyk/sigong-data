@@ -110,6 +110,9 @@ export function buildCard(record: SiteRecord, folderUrl?: string) {
       ['현장 ID', record.id],
       ['시공기사', formatTechnicians(record.technicians || []) || record.managerName],
       ['시공종류', record.constructionType],
+      ...((record.customFields || []).filter((field) => field.value).map(
+        (field) => [field.label, field.value] as [string, string]
+      )),
       ['시공일', record.constructionDate],
       ['현장주소', record.address],
       [

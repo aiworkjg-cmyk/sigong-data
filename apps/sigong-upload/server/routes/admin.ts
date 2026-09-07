@@ -1,10 +1,12 @@
 import { Router } from 'express';
+import { SUBMISSION_FIELDS } from '../../src/submission-layout';
 import type { Response } from 'express';
+import { DelegatedAuthError, GraphApiError, GraphClient } from '@jg/sharepoint-core';
 import { AdminError, scopeOf } from '../admin-directory';
 import { requireManager, requireMaster } from '../auth';
 import { config } from '../config';
 import { mailer } from '../mailer';
-import { SettingsError } from '../settings';
+import { SettingsError, assertTeamsWebhookUrl } from '../settings';
 import { buildCard, teams } from '../teams';
 import type { AppContext } from '../context';
 import { ASSIGNABLE_ROLES } from '../../src/types';
@@ -17,7 +19,8 @@ import type {
   IssueStatus,
   ViewScope,
 } from '../../src/types';
-import { cleanText, clientIp, generateId } from '../util';
+import { cleanText, clientIp, escapeHtml, generateId } from '../util';
+import { createConnectionTestPng } from '../test-image';
 
 const ISSUE_STATUSES: IssueStatus[] = ['OPEN', 'IN_PROGRESS', 'RESOLVED'];
 const ISSUE_PRIORITIES: IssuePriority[] = ['LOW', 'NORMAL', 'HIGH'];
@@ -47,25 +50,40 @@ function readStringArray(value: unknown): string[] {
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
 /** Shown beside the folder-rule editor so the admin need not guess key names. */
+/** 파일 이름에 쓸 수 있는 토큰. 폴더 토큰과 달리 이 넷뿐입니다. */
+const FILE_NAME_ONLY_TOKENS: { token: string; label: string; sample: string }[] = [
+  { token: '{번호}', label: '오름차순 번호 (필수)', sample: '001' },
+  { token: '{종류}', label: '이미지 / 동영상 / 파일', sample: '이미지' },
+  { token: '{폴더명}', label: '저장 폴더 이름', sample: '0809_경기광명시_이편한세상' },
+  { token: '{원본파일명}', label: '기사 휴대폰의 원래 이름', sample: 'KakaoTalk_20260803' },
+];
+
 const AVAILABLE_TOKENS: { token: string; label: string; sample: string }[] = [
-  { token: '{type}', label: '시공종류', sample: '백조' },
-  { token: '{region}', label: '지역 (시도+시군구)', sample: '경기도광명시' },
-  { token: '{building}', label: '건물·아파트명', sample: '이편한세상' },
-  { token: '{dong}', label: '읍면동', sample: '소하동' },
-  { token: '{yyyy}', label: '연도', sample: '2026' },
-  { token: '{MM}', label: '월', sample: '08' },
-  { token: '{dd}', label: '일', sample: '24' },
-  { token: '{MMdd}', label: '월일', sample: '0824' },
-  { token: '{date}', label: '시공일', sample: '2026-08-24' },
-  { token: '{yyyy-MM}', label: '연-월', sample: '2026-08' },
-  { token: '{quarter}', label: '분기', sample: 'Q3' },
-  { token: '{sido}', label: '시도', sample: '경기도' },
-  { token: '{sigungu}', label: '시군구', sample: '광명시' },
-  { token: '{address}', label: '입력한 주소 전체', sample: '경기도 광명시 …' },
-  { token: '{addressCompact}', label: '주소(공백 제거)', sample: '경기도광명시…' },
-  { token: '{siteId}', label: '현장 ID', sample: 'BAEKJO-20260824-001' },
-  { token: '{manager}', label: '시공기사', sample: '홍길동(팀장)' },
-  { token: '{submittedDate}', label: '제출일', sample: '2026-08-24' },
+  // 토큰 이름은 한글입니다. 규칙을 읽는 사람이 무엇이 들어갈지 바로 알아보는
+  // 것이 토큰의 목적이고, 이 시스템을 쓰는 사람들은 한국어로 일합니다.
+  // 예전 영문 이름({type} 등)도 계속 동작합니다 — 이미 저장된 규칙 때문입니다.
+  { token: '{시공종류}', label: '시공종류', sample: '백조' },
+  { token: '{현장종류}', label: '현장종류', sample: '롯데부산점' },
+  { token: '{주문자명}', label: '주문자명', sample: '홍길동' },
+  { token: '{지역}', label: '지역 (시도+시군구)', sample: '경기광명시' },
+  { token: '{건물명}', label: '건물·아파트명', sample: '이편한세상' },
+  { token: '{읍면동}', label: '읍면동', sample: '소하동' },
+  { token: '{연도}', label: '연도', sample: '2026' },
+  { token: '{월}', label: '월', sample: '08' },
+  { token: '{일}', label: '일', sample: '24' },
+  { token: '{월일}', label: '월일', sample: '0824' },
+  { token: '{시공일}', label: '시공일', sample: '2026-08-24' },
+  { token: '{연월}', label: '연-월', sample: '2026-08' },
+  { token: '{연월일}', label: '연월일 (두 자리 연도)', sample: '260809' },
+  { token: '{짧은연도}', label: '두 자리 연도', sample: '26' },
+  { token: '{분기}', label: '분기', sample: 'Q3' },
+  { token: '{시도}', label: '시도', sample: '경기' },
+  { token: '{시군구}', label: '시군구', sample: '광명시' },
+  { token: '{주소}', label: '입력한 주소 전체', sample: '경기 광명시 …' },
+  { token: '{주소압축}', label: '주소(공백 제거)', sample: '경기광명시…' },
+  { token: '{현장ID}', label: '현장 ID', sample: 'BAEKJO-20260824-001' },
+  { token: '{시공기사}', label: '시공기사', sample: '홍길동(팀장)' },
+  { token: '{제출일}', label: '제출일', sample: '2026-08-24' },
 ];
 
 function readDate(value: unknown): string | undefined {
@@ -460,6 +478,58 @@ export function createAdminRouter(ctx: AppContext): Router {
     res.status(500).json({ error: '설정 변경 실패', message: '요청을 처리하지 못했습니다.' });
   };
 
+  const handleGraphConnectionError = (
+    err: unknown,
+    res: Response,
+    operation: 'resolve' | 'upload' = 'resolve'
+  ) => {
+    if (err instanceof SettingsError) {
+      handleSettingsError(err, res);
+      return;
+    }
+    if (err instanceof DelegatedAuthError) {
+      res.status(err.status >= 400 && err.status < 500 ? err.status : 502).json({
+        error: 'Microsoft 로그인 오류',
+        message: err.message,
+      });
+      return;
+    }
+    if (err instanceof GraphApiError) {
+      const message = err.status === 403
+        ? operation === 'upload'
+          ? '대상 SharePoint에 쓰기 권한이 없습니다. Sites.Selected를 사용한다면 이 사이트에 앱의 write 권한을 부여하고, 전체 자동 연결 방식을 사용한다면 Files.ReadWrite.All 관리자 동의를 확인해 주세요.'
+          // The delegated route is named first because it is the one an admin
+          // can act on alone: signing in as themselves needs no tenant-wide
+          // application permission, which is what usually blocks this call.
+          : 'Teams 조회 권한이 없습니다. 설정 화면에서 [Microsoft 로그인]으로 업무 계정을 연결하면 관리자 동의 없이 본인이 속한 팀을 찾을 수 있습니다. 앱 권한 방식으로 쓰려면 Azure 앱에 Team.ReadBasic.All, Channel.ReadBasic.All, Files.ReadWrite.All 응용 프로그램 권한과 관리자 동의가 필요합니다.'
+        : err.status === 401
+          ? 'Azure 앱 인증에 실패했습니다. 테넌트 ID, 클라이언트 ID, 클라이언트 암호를 확인해 주세요.'
+          : err.message;
+      res.status(err.status >= 400 && err.status < 500 ? err.status : 502).json({
+        error: 'Microsoft 365 연결 실패',
+        message,
+      });
+      return;
+    }
+    console.error('[admin] Microsoft 365 연결 실패', err);
+    res.status(502).json({
+      error: 'Microsoft 365 연결 실패',
+      message: err instanceof Error ? err.message : '요청을 처리하지 못했습니다.',
+    });
+  };
+
+  /**
+   * 앱을 거치지 않은 SharePoint 변경 기록.
+   *
+   * 업로드 로그와 분리돼 있습니다 — 업로드 로그는 이 사이트를 통한 실제
+   * 업로드만 담고, 사람이 SharePoint 를 직접 만진 사건은 이쪽에 쌓입니다.
+   */
+  router.get('/manual-audit', requireMaster, async (req, res) => {
+    const { readManualAudit } = await import('../manual-audit');
+    const limit = Math.min(Math.max(Number(req.query?.limit) || 500, 1), 5000);
+    res.json({ entries: await readManualAudit(limit) });
+  });
+
   router.get('/settings/construction-types', (_req, res) => {
     res.json({ constructionTypes: ctx.settings.constructionTypes() });
   });
@@ -659,16 +729,30 @@ export function createAdminRouter(ctx: AppContext): Router {
   /* ---------------------------------------------------------------- */
 
   router.get('/settings/teams-webhook', requireMaster, (_req, res) => {
-    res.json({ teamsWebhookUrl: ctx.settings.teamsWebhookUrl() });
+    res.json({ webhooks: ctx.settings.teamsWebhooks() });
   });
 
-  router.put('/settings/teams-webhook', requireMaster, async (req, res) => {
+  router.post('/settings/teams-webhook', requireMaster, async (req, res) => {
     try {
-      const teamsWebhookUrl = await ctx.settings.setTeamsWebhookUrl(String(req.body?.url ?? ''));
-      res.json({ teamsWebhookUrl });
+      const webhook = await ctx.settings.saveTeamsWebhook(req.body || {});
+      res.status(201).json({ webhook, webhooks: ctx.settings.teamsWebhooks() });
     } catch (err) {
       handleSettingsError(err, res);
     }
+  });
+
+  router.put('/settings/teams-webhook/:id', requireMaster, async (req, res) => {
+    try {
+      const webhook = await ctx.settings.saveTeamsWebhook({ ...req.body, id: req.params.id });
+      res.json({ webhook, webhooks: ctx.settings.teamsWebhooks() });
+    } catch (err) { handleSettingsError(err, res); }
+  });
+
+  router.delete('/settings/teams-webhook/:id', requireMaster, async (req, res) => {
+    try {
+      await ctx.settings.removeTeamsWebhook(req.params.id);
+      res.json({ webhooks: ctx.settings.teamsWebhooks() });
+    } catch (err) { handleSettingsError(err, res); }
   });
 
   /**
@@ -684,6 +768,22 @@ export function createAdminRouter(ctx: AppContext): Router {
       res.status(400).json({ error: '설정 오류', message: '알림 주소를 먼저 입력해 주세요.' });
       return;
     }
+    // The same check the save path runs. When these two disagreed, a test could
+    // succeed against an address that could never be saved — which is precisely
+    // the state that produced a green "보냈습니다" beside a red save error.
+    try {
+      assertTeamsWebhookUrl(url);
+    } catch (err) {
+      handleSettingsError(err, res);
+      return;
+    }
+
+    // The sample card carries a real folder link so the [자료 폴더 열기] button
+    // appears — a test that silently omits the one interactive part of the card
+    // proves less than it looks like it does.
+    const probe = ctx.sharePoint.getConfigStatus().isLiveConfigured
+      ? await ctx.sharePoint.probe()
+      : null;
 
     const sample = {
       id: 'BAEKJO-20260826-001',
@@ -705,7 +805,7 @@ export function createAdminRouter(ctx: AppContext): Router {
       ],
     };
 
-    const result = await teams.post(url, buildCard(sample));
+    const result = await teams.post(url, buildCard(sample, probe?.webUrl));
     if (!result.ok) {
       res.status(502).json({
         error: '알림 전송 실패',
@@ -724,12 +824,37 @@ export function createAdminRouter(ctx: AppContext): Router {
   router.get('/settings/folder-rule', requireMaster, (_req, res) => {
     const rule = ctx.settings.folderRule();
     res.json({
-      folderRule: { root: rule.root, segments: rule.segments },
+      folderRule: {
+        root: rule.root,
+        segments: rule.segments,
+        fileNameTemplate: rule.fileNameTemplate,
+      },
+      // 파일 이름에는 폴더 토큰도 그대로 쓸 수 있습니다 — 폴더 이름만으로는
+      // 업체가 다른 같은 이름의 폴더를 구분하지 못합니다.
+      fileNameTokens: [...FILE_NAME_ONLY_TOKENS, ...AVAILABLE_TOKENS],
       // Rendered from a fixed sample so the admin sees the shape of the result
       // before saving, not after the next submission lands in the wrong place.
       example: ctx.sharePoint.getConfigStatus().examplePath,
       availableTokens: AVAILABLE_TOKENS,
+      // 관리자가 저장해 둔 기본값. 없으면 null 이고, 화면은 그때 버튼을 숨깁니다.
+      savedDefault: ctx.settings.folderRuleDefault(),
     });
+  });
+
+  /**
+   * 지금 설정을 기본값으로 저장합니다.
+   *
+   * 지금 쓰는 규칙과 따로 보관합니다 — 운영 중에 규칙을 이리저리 바꿔 보다가
+   * 되돌리고 싶을 때, 코드에 박힌 초기값이 아니라 이 회사가 정한 값으로
+   * 돌아가야 의미가 있습니다.
+   */
+  router.post('/settings/folder-rule/default', requireMaster, async (_req, res) => {
+    try {
+      await ctx.settings.saveFolderRuleAsDefault();
+      res.json({ savedDefault: ctx.settings.folderRuleDefault() });
+    } catch (err) {
+      handleSettingsError(err, res);
+    }
   });
 
   router.put('/settings/folder-rule', requireMaster, async (req, res) => {
@@ -737,6 +862,7 @@ export function createAdminRouter(ctx: AppContext): Router {
       const folderRule = await ctx.settings.setFolderRule({
         root: String(req.body?.root ?? ''),
         segments: readStringArray(req.body?.segments),
+        fileNameTemplate: req.body?.fileNameTemplate,
       });
 
       // The service resolves paths from its own copy, so hand it the new rule
@@ -744,12 +870,271 @@ export function createAdminRouter(ctx: AppContext): Router {
       ctx.sharePoint.rule = folderRule;
 
       res.json({
-        folderRule: { root: folderRule.root, segments: folderRule.segments },
+        folderRule: {
+          root: folderRule.root,
+          segments: folderRule.segments,
+          fileNameTemplate: folderRule.fileNameTemplate,
+        },
         example: ctx.sharePoint.getConfigStatus().examplePath,
       });
     } catch (err) {
       handleSettingsError(err, res);
     }
+  });
+
+  /* 자료 업로드 화면의 입력 항목 차례 */
+
+  router.get('/settings/submission-order', requireMaster, (_req, res) => {
+    res.json({ orders: ctx.settings.submissionOrders(), fields: SUBMISSION_FIELDS });
+  });
+
+  router.put('/settings/submission-order', requireMaster, async (req, res) => {
+    try {
+      const order = await ctx.settings.setSubmissionOrder(
+        String(req.body?.constructionType ?? ''),
+        req.body?.order
+      );
+      res.json({ order });
+    } catch (err) {
+      handleSettingsError(err, res);
+    }
+  });
+
+  router.get('/settings/construction-type-configs', requireMaster, (_req, res) => {
+    res.json({ configs: ctx.settings.constructionTypeConfigs(), availableTokens: AVAILABLE_TOKENS });
+  });
+
+  router.put('/settings/construction-type-configs/:name', requireMaster, async (req, res) => {
+    try {
+      const configValue = await ctx.settings.setConstructionTypeConfig(
+        req.params.name,
+        req.body || {}
+      );
+      res.json({ config: configValue });
+    } catch (err) {
+      handleSettingsError(err, res);
+    }
+  });
+
+  /* ---------------------------------------------------------------- */
+  /* Microsoft 업무 계정 로그인 (master only)                            */
+  /* ---------------------------------------------------------------- */
+
+  router.get('/settings/microsoft', requireMaster, (_req, res) => {
+    res.json(ctx.microsoft.view());
+  });
+
+  /**
+   * Hands back the Microsoft sign-in URL for the admin's browser to open.
+   *
+   * Returned as a URL rather than served as a redirect because the caller is a
+   * fetch() from the 설정 화면: a 302 would be followed by the fetch itself and
+   * the admin would never see the Microsoft page.
+   */
+  router.post('/settings/microsoft/signin', requireMaster, (_req, res) => {
+    try {
+      const { url } = ctx.microsoft.beginSignIn();
+      res.json({ url, redirectUri: ctx.microsoft.redirectUri });
+    } catch (err) {
+      handleGraphConnectionError(err, res, 'resolve');
+    }
+  });
+
+  /**
+   * Where Microsoft sends the browser back to.
+   *
+   * Answers with a small HTML page rather than JSON: this is a top-level
+   * navigation in a popup the admin is looking at, so it has to say something
+   * human and then close itself.
+   */
+  router.get('/settings/microsoft/callback', requireMaster, async (req, res) => {
+    const done = (ok: boolean, message: string) => {
+      res.status(ok ? 200 : 400).type('html').send(
+        `<!doctype html><html lang="ko"><head><meta charset="utf-8">
+<title>Microsoft 연결</title></head>
+<body style="font-family:system-ui,sans-serif;padding:32px;text-align:center">
+<h2 style="color:${ok ? '#047857' : '#b91c1c'}">${ok ? '연결되었습니다' : '연결하지 못했습니다'}</h2>
+<p style="color:#475569;font-size:14px;max-width:520px;margin:12px auto">${escapeHtml(message)}</p>
+<p style="color:#94a3b8;font-size:12px">이 창은 잠시 후 자동으로 닫힙니다.</p>
+<script>
+  try { window.opener && window.opener.postMessage(
+    { source: 'sigong-microsoft', ok: ${ok ? 'true' : 'false'} }, window.location.origin); } catch (e) {}
+  setTimeout(function () { window.close(); }, ${ok ? 1200 : 6000});
+</script></body></html>`
+      );
+    };
+
+    // Microsoft reports a refused consent by redirecting here with an error
+    // rather than by failing the request, so it has to be read off the query.
+    const failure = cleanText(req.query?.error_description, 400) || cleanText(req.query?.error, 200);
+    if (failure) {
+      done(false, failure);
+      return;
+    }
+    try {
+      await ctx.microsoft.completeSignIn(
+        cleanText(req.query?.code, 4000),
+        cleanText(req.query?.state, 200)
+      );
+      done(true, `${ctx.microsoft.signedInUpn()} 계정으로 연결되었습니다. 설정 화면으로 돌아가 주세요.`);
+    } catch (err) {
+      console.error('[admin] Microsoft 로그인 실패', err);
+      done(false, err instanceof Error ? err.message : 'Microsoft 로그인에 실패했습니다.');
+    }
+  });
+
+  router.delete('/settings/microsoft', requireMaster, async (_req, res) => {
+    await ctx.microsoft.signOut();
+    res.json(ctx.microsoft.view());
+  });
+
+  /**
+   * The teams and channels the remembered account can actually see.
+   *
+   * Offered so the admin picks a name instead of typing one. Most "찾지 못했습니다"
+   * reports were a spelling difference between the name shown in the Teams
+   * sidebar and the team's stored displayName, which no error message can fix
+   * as well as simply showing the real list.
+   */
+  router.get('/settings/microsoft/teams', requireMaster, async (req, res) => {
+    try {
+      const client = graphClientForLookup();
+      const accountEmail = cleanText(req.query?.accountEmail, 254) || ctx.microsoft.signedInUpn();
+      const teamId = cleanText(req.query?.teamId, 200);
+      if (teamId) {
+        const channels = await client.listTeamChannels(teamId);
+        res.json({ channels: channels.map(({ id, displayName, membershipType }) =>
+          ({ id, displayName, membershipType })) });
+        return;
+      }
+      const joined = await client.listJoinedTeams(accountEmail);
+      res.json({ teams: joined.map(({ id, displayName }) => ({ id, displayName })) });
+    } catch (err) {
+      handleGraphConnectionError(err, res, 'resolve');
+    }
+  });
+
+  router.get('/settings/storage-target', requireMaster, (_req, res) => {
+    res.json(ctx.settings.storageTargets());
+  });
+
+  /**
+   * A Graph client for read-only Teams lookups.
+   *
+   * Prefers the signed-in administrator: delegated access needs no tenant-wide
+   * consent and sees exactly the teams that person belongs to. Falls back to
+   * the app's own credentials for tenants that did grant the application
+   * permissions, so existing installations keep working untouched.
+   */
+  function graphClientForLookup(): GraphClient {
+    const credentials = config.sharePoint;
+    const delegated = ctx.microsoft.graphClient(credentials);
+    if (delegated) return delegated;
+
+    if (!credentials.tenantId || !credentials.clientId || !credentials.clientSecret) {
+      throw new SettingsError(
+        '서버의 Azure 앱 설정이 없습니다. SHAREPOINT_TENANT_ID, SHAREPOINT_CLIENT_ID, SHAREPOINT_CLIENT_SECRET을 먼저 등록해 주세요.'
+      );
+    }
+    return new GraphClient(credentials);
+  }
+
+  router.post('/settings/storage-target/resolve', requireMaster, async (req, res) => {
+    try {
+      // With an account remembered, the admin supplies a team and a channel and
+      // nothing else — which is the whole point of remembering it.
+      const accountEmail =
+        cleanText(req.body?.accountEmail, 254) || ctx.microsoft.signedInUpn();
+      const teamName = cleanText(req.body?.teamName, 80);
+      const channelName = cleanText(req.body?.channelName, 80);
+      if (!teamName || !channelName) {
+        throw new SettingsError('Teams 팀 이름과 채널 이름을 입력해 주세요.');
+      }
+      const client = graphClientForLookup();
+      // Only the app-only path needs to be told whose teams to read; a delegated
+      // token already carries the account.
+      if (!client.isDelegated && (!accountEmail || !accountEmail.includes('@'))) {
+        throw new SettingsError(
+          'Microsoft 업무 계정을 확인할 수 없습니다. [Microsoft 로그인]으로 계정을 연결하거나 계정 이메일을 입력해 주세요.'
+        );
+      }
+
+      const resolved = await client.resolveTeamsStorageTarget({
+        accountEmail,
+        teamName,
+        channelName,
+      });
+      const existing = ctx.settings.storageTargets().targets.find((entry) =>
+        (entry.channelId && entry.channelId === resolved.channelId) ||
+        (entry.driveId === resolved.driveId && entry.channelFolder === resolved.channelFolder)
+      );
+      const target = await ctx.settings.saveStorageTarget({ ...resolved, id: existing?.id });
+      await ctx.settings.selectStorageTarget(target.id);
+      ctx.sharePoint.setStorageTarget({ siteId: target.siteId, driveId: target.driveId });
+      await ctx.manualUploads.resetForTarget();
+      res.status(201).json({
+        target,
+        ...ctx.settings.storageTargets(),
+        status: ctx.sharePoint.getConfigStatus(),
+        channelWebUrl: resolved.webUrl,
+      });
+    } catch (err) {
+      handleGraphConnectionError(err, res, 'resolve');
+    }
+  });
+
+  router.post('/settings/storage-target/test-upload', requireMaster, async (_req, res) => {
+    try {
+      const target = ctx.settings.storageTarget();
+      const result = await ctx.sharePoint.uploadConnectionTestImage(
+        createConnectionTestPng(),
+        target.channelFolder
+      );
+      res.status(201).json({ ...result, target });
+    } catch (err) {
+      handleGraphConnectionError(err, res, 'upload');
+    }
+  });
+
+  router.post('/settings/storage-target', requireMaster, async (req, res) => {
+    try {
+      const target = await ctx.settings.saveStorageTarget(req.body || {});
+      res.status(201).json({ target, ...ctx.settings.storageTargets() });
+    } catch (err) {
+      handleSettingsError(err, res);
+    }
+  });
+
+  router.put('/settings/storage-target/:id', requireMaster, async (req, res) => {
+    try {
+      const target = await ctx.settings.saveStorageTarget({ ...req.body, id: req.params.id });
+      if (ctx.settings.storageTargets().activeTargetId === target.id) {
+        ctx.sharePoint.setStorageTarget({ siteId: target.siteId, driveId: target.driveId });
+        await ctx.manualUploads.resetForTarget();
+      }
+      res.json({ target, ...ctx.settings.storageTargets() });
+    } catch (err) { handleSettingsError(err, res); }
+  });
+
+  router.post('/settings/storage-target/:id/select', requireMaster, async (req, res) => {
+    try {
+      const target = await ctx.settings.selectStorageTarget(req.params.id);
+      ctx.sharePoint.setStorageTarget({ siteId: target.siteId, driveId: target.driveId });
+      await ctx.manualUploads.resetForTarget();
+      res.json({ target, ...ctx.settings.storageTargets(), status: ctx.sharePoint.getConfigStatus() });
+    } catch (err) {
+      handleSettingsError(err, res);
+    }
+  });
+
+  router.delete('/settings/storage-target/:id', requireMaster, async (req, res) => {
+    try {
+      await ctx.settings.removeStorageTarget(req.params.id);
+      const target = ctx.settings.storageTarget();
+      ctx.sharePoint.setStorageTarget({ siteId: target.siteId, driveId: target.driveId });
+      await ctx.manualUploads.resetForTarget();
+      res.json(ctx.settings.storageTargets());
+    } catch (err) { handleSettingsError(err, res); }
   });
 
   /* ---------------------------------------------------------------- */

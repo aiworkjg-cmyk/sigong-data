@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Search, UserPlus, X } from 'lucide-react';
 import { matchesQuery } from '../hangul';
 import { titleStyle } from '../technicians';
@@ -11,6 +11,14 @@ interface TechnicianPickerProps {
   onChange: (ids: string[]) => void;
   disabled?: boolean;
   hasError?: boolean;
+  /**
+   * 주문서에 적힌 예정 기사 이름.
+   *
+   * 대개 이 사람이 실제로 다녀오므로 목록 맨 위에 둡니다. 다만 **거르지는
+   * 않습니다** — 예정과 실제가 다른 경우가 흔하고, 걸러 버리면 대신 간 기사가
+   * 자기 이름을 찾지 못해 목록을 포기하게 됩니다.
+   */
+  expectedName?: string;
 }
 
 /**
@@ -29,6 +37,7 @@ export const TechnicianPicker: React.FC<TechnicianPickerProps> = ({
   onChange,
   disabled,
   hasError,
+  expectedName,
 }) => {
   const [query, setQuery] = useState('');
   const [isOpen, setIsOpen] = useState(false);
@@ -43,12 +52,31 @@ export const TechnicianPicker: React.FC<TechnicianPickerProps> = ({
     [selectedIds, technicians]
   );
 
+  /**
+   * 주문서의 예정 기사와 같은 사람인지.
+   *
+   * 주문서에는 "유동현 팀장" 처럼 직함이 붙어 오고 명부에는 이름만 있어서,
+   * 정확히 같기를 기대할 수 없습니다. 공백을 지운 뒤 한쪽이 다른 쪽을
+   * 포함하는지로 봅니다.
+   */
+  const isExpected = useCallback(
+    (name: string) => {
+      const wanted = (expectedName || '').replace(/\s+/g, '');
+      const candidate = name.replace(/\s+/g, '');
+      if (!wanted || !candidate) return false;
+      return wanted.includes(candidate) || candidate.includes(wanted);
+    },
+    [expectedName]
+  );
+
   const matches = useMemo(
     () =>
       technicians
         .filter((tech) => !selectedIds.includes(tech.id))
-        .filter((tech) => matchesQuery(tech.name, query)),
-    [technicians, selectedIds, query]
+        .filter((tech) => matchesQuery(tech.name, query))
+        // 예정 기사를 맨 위로. 순서만 바꾸고 아무도 빼지 않습니다.
+        .sort((left, right) => Number(isExpected(right.name)) - Number(isExpected(left.name))),
+    [technicians, selectedIds, query, isExpected]
   );
 
   // Keep the highlighted row inside the result list as it shrinks while typing.
@@ -188,6 +216,14 @@ export const TechnicianPicker: React.FC<TechnicianPickerProps> = ({
                       <span className={`w-1 h-6 rounded-full shrink-0 ${style.accent}`} />
                       <span className="text-sm font-bold text-slate-800 flex-1 truncate">
                         {tech.name}
+                        {/* 안내일 뿐이라 연하게 둡니다. 진하게 하면 "이 사람을
+                            골라야 한다"로 읽혀, 실제로 간 기사를 고르는 것을
+                            망설이게 만듭니다. */}
+                        {isExpected(tech.name) && (
+                          <span className="ml-1.5 px-1.5 py-0.5 rounded bg-slate-100 text-[10px] font-medium text-slate-500 align-middle">
+                            시공예정기사
+                          </span>
+                        )}
                       </span>
                       <span
                         className={`px-2 py-0.5 rounded-full border text-[11px] font-bold shrink-0 ${style.chip}`}

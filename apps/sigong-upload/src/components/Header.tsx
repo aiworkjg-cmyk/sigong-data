@@ -21,6 +21,8 @@ interface HeaderProps {
   /** Opens the navigation drawer on small screens. */
   onOpenMenu: () => void;
   isMobilePreview: boolean;
+  /** 미리보기 틀 안에서는 미리보기 버튼을 숨깁니다 — 겹쳐 열 이유가 없습니다. */
+  previewable?: boolean;
   onToggleMobilePreview: () => void;
 }
 
@@ -32,6 +34,7 @@ export const Header: React.FC<HeaderProps> = ({
   onLogout,
   onOpenMenu,
   isMobilePreview,
+  previewable = true,
   onToggleMobilePreview,
 }) => (
   <header
@@ -70,7 +73,7 @@ export const Header: React.FC<HeaderProps> = ({
         <div className="flex items-center gap-1.5 shrink-0">
           {/* Mobile preview — most submissions arrive from a phone, so the
               admin needs to see the phone layout without leaving the desk. */}
-          {session && (
+          {session && previewable && (
             <button
               type="button"
               onClick={onToggleMobilePreview}

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Check,
   Loader2,
@@ -21,6 +21,14 @@ import type { AdminSession, Technician, TechnicianTitle } from '../types';
 
 interface TechnicianManagerProps {
   session: AdminSession;
+  /**
+   * 명부가 바뀔 때마다 부릅니다.
+   *
+   * 제출 화면의 기사 목록은 공용 설정에서 오므로, 여기서 알려 주지 않으면
+   * 방금 추가한 기사를 현장에서 고를 수 없습니다 — 관리자는 추가했다고
+   * 생각하고, 기사는 자기 이름이 없다고 합니다.
+   */
+  onChanged?: () => void;
 }
 
 interface Draft {
@@ -50,7 +58,7 @@ const EMPTY_DRAFT: Draft = {
  * 업체 is what decides who can see whom — a 업체 관리자 is served only the
  * entries carrying their own 업체, and can only tag within it.
  */
-export const TechnicianManager: React.FC<TechnicianManagerProps> = ({ session }) => {
+export const TechnicianManager: React.FC<TechnicianManagerProps> = ({ session, onChanged }) => {
   const [technicians, setTechnicians] = useState<Technician[]>([]);
   const [assignableTypes, setAssignableTypes] = useState<string[]>([]);
   const [deleteRequestEmails, setDeleteRequestEmails] = useState<string[]>([]);
@@ -65,23 +73,69 @@ export const TechnicianManager: React.FC<TechnicianManagerProps> = ({ session })
   const [editDraft, setEditDraft] = useState<Draft>(EMPTY_DRAFT);
   const [deleteRequest, setDeleteRequest] = useState<Technician | null>(null);
 
+  /** 직책·업체 필터. 명부가 길어지면 눈으로 훑는 것이 곧 실수가 됩니다. */
+  const [filterTitle, setFilterTitle] = useState<TechnicianTitle | ''>('');
+  const [filterType, setFilterType] = useState('');
+  const [search, setSearch] = useState('');
+
   const mayDelete = canDeleteTechnicians(session.role);
   const master = isMaster(session.role);
 
-  const load = useCallback(async () => {
-    setIsLoading(true);
-    setError(null);
-    try {
-      const result = await adminApi.technicians();
-      setTechnicians(result.technicians);
-      setAssignableTypes(result.assignableTypes);
-      setDeleteRequestEmails(result.deleteRequestEmails);
-    } catch (err: any) {
-      setError(err?.message || '시공기사 명부를 불러오지 못했습니다.');
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
+  /**
+   * 직책 순서(팀장 → 사수 → 부사수), 그 안에서는 이름 가나다순.
+   *
+   * 이름순으로만 늘어놓으면 팀장이 명부 한가운데 섞여, 배차할 때 누구를
+   * 중심으로 짝을 지을지 매번 다시 찾아야 합니다. 직책이 곧 역할이므로
+   * 그 순서가 명부의 순서여야 합니다.
+   */
+  const visible = useMemo(() => {
+    const rank = (title: string) => {
+      const at = (TECHNICIAN_TITLES as readonly string[]).indexOf(title);
+      return at < 0 ? TECHNICIAN_TITLES.length : at;
+    };
+    const needle = search.trim().toLowerCase().replace(/\s+/g, '');
+    return technicians
+      .filter((tech) => {
+        if (filterTitle && tech.title !== filterTitle) return false;
+        if (filterType && !(tech.constructionTypes ?? []).includes(filterType)) return false;
+        if (!needle) return true;
+        return [tech.name, tech.phone, tech.region]
+          .filter(Boolean)
+          .join(' ')
+          .toLowerCase()
+          .replace(/\s+/g, '')
+          .includes(needle);
+      })
+      .sort(
+        (left, right) =>
+          rank(left.title) - rank(right.title) || left.name.localeCompare(right.name, 'ko')
+      );
+  }, [technicians, filterTitle, filterType, search]);
+
+  const load = useCallback(
+    async (announce = false) => {
+      setIsLoading(true);
+      setError(null);
+      try {
+        const result = await adminApi.technicians();
+        setTechnicians(result.technicians);
+        setAssignableTypes(result.assignableTypes);
+        setDeleteRequestEmails(result.deleteRequestEmails);
+        // 제출 화면도 같은 순간에 맞춥니다.
+        onChanged?.();
+        if (announce) {
+          // 새로고침은 화면이 그대로일 때가 많습니다. 아무 말이 없으면
+          // 눌린 건지 안 눌린 건지 알 수 없어 계속 다시 누르게 됩니다.
+          setNotice(`명부를 새로 불러왔습니다 — 기사 ${result.technicians.length}명.`);
+        }
+      } catch (err: any) {
+        setError(err?.message || '시공기사 명부를 불러오지 못했습니다.');
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [onChanged]
+  );
 
   useEffect(() => {
     void load();
@@ -102,6 +156,7 @@ export const TechnicianManager: React.FC<TechnicianManagerProps> = ({ session })
         region: draft.region,
       });
       setTechnicians(list);
+      onChanged?.();
       setDraft(EMPTY_DRAFT);
       setIsComposing(false);
       setNotice(`${draft.name} (${draft.title}) 을(를) 명부에 추가했습니다.`);
@@ -140,6 +195,7 @@ export const TechnicianManager: React.FC<TechnicianManagerProps> = ({ session })
         region: editDraft.region,
       });
       setTechnicians(list);
+      onChanged?.();
       setEditingId(null);
       setNotice('기사 정보를 수정했습니다.');
     } catch (err: any) {
@@ -164,6 +220,7 @@ export const TechnicianManager: React.FC<TechnicianManagerProps> = ({ session })
     try {
       const { technicians: list } = await adminApi.deleteTechnician(technician.id);
       setTechnicians(list);
+      onChanged?.();
       setNotice(`${technician.name} 을(를) 명부에서 삭제했습니다.`);
     } catch (err: any) {
       setError(err?.message || '삭제에 실패했습니다.');
@@ -202,11 +259,12 @@ export const TechnicianManager: React.FC<TechnicianManagerProps> = ({ session })
         <div className="flex items-center gap-2 shrink-0">
           <button
             type="button"
-            onClick={() => void load()}
-            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700"
+            onClick={() => void load(true)}
+            disabled={isLoading}
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 disabled:opacity-60 text-xs font-semibold text-slate-700"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin text-blue-600' : ''}`} />
-            <span className="hidden sm:inline">새로고침</span>
+            <span className="hidden sm:inline">{isLoading ? '불러오는 중…' : '새로고침'}</span>
           </button>
           <button
             type="button"
@@ -261,15 +319,60 @@ export const TechnicianManager: React.FC<TechnicianManagerProps> = ({ session })
         </form>
       )}
 
+      {/* 필터. 명부는 이름만으로 찾기에는 금방 길어집니다. */}
+      <div className="flex flex-wrap items-center gap-1.5 mb-2">
+        {(['', ...TECHNICIAN_TITLES] as const).map((title) => (
+          <button
+            key={title || 'all'}
+            type="button"
+            onClick={() => setFilterTitle(title as TechnicianTitle | '')}
+            className={`px-2.5 py-1.5 rounded-lg border text-xs font-bold ${
+              filterTitle === title
+                ? 'border-slate-900 bg-slate-900 text-white'
+                : 'border-slate-300 bg-white text-slate-600'
+            }`}
+          >
+            {title || '전체 직책'}
+          </button>
+        ))}
+
+        {assignableTypes.length > 1 && (
+          <select
+            value={filterType}
+            onChange={(event) => setFilterType(event.target.value)}
+            className="px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white text-xs"
+          >
+            <option value="">전체 업체</option>
+            {assignableTypes.map((type) => (
+              <option key={type} value={type}>
+                {type}
+              </option>
+            ))}
+          </select>
+        )}
+
+        <input
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+          placeholder="이름 · 연락처 · 지역"
+          className="flex-1 min-w-[140px] px-2.5 py-1.5 rounded-lg border border-slate-300 text-xs"
+        />
+
+        <span className="text-xs font-semibold text-slate-500">
+          {visible.length}명
+          {visible.length !== technicians.length && ` / 전체 ${technicians.length}명`}
+        </span>
+      </div>
+
       <div className="bg-white rounded-2xl border border-slate-200 divide-y divide-slate-100 overflow-hidden">
-        {technicians.length === 0 && !isLoading ? (
+        {visible.length === 0 && !isLoading ? (
           <p className="py-16 text-center text-xs text-slate-400">
             {master
               ? '등록된 시공기사가 없습니다. [기사 추가]로 명부를 만들어 주세요.'
               : '담당 업체로 등록된 시공기사가 없습니다.'}
           </p>
         ) : (
-          technicians.map((tech) => {
+          visible.map((tech) => {
             const style = titleStyle(tech.title);
             const isEditing = editingId === tech.id;
             const isBusy = busy === tech.id;

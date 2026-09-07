@@ -1,4 +1,8 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
+import { EMPTY_FILTERS, RecordFilterBar, matchesFilters } from './RecordFilterBar';
+import type { RecordFilters } from './RecordFilterBar';
+import { regionGroupOf } from '../types';
+import { adminApi } from '../api';
 import {
   Search,
   Calendar,
@@ -35,14 +39,43 @@ export const AdminSiteList: React.FC<AdminSiteListProps> = ({
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedFilter, setSelectedFilter] = useState<'all' | 'today' | 'with-files'>('all');
+  const [filters, setFilters] = useState<RecordFilters>(EMPTY_FILTERS);
 
   const todayStr = new Date().toISOString().slice(0, 10);
 
+  /** 실제 데이터에 등장한 값만 선택지로 둡니다. */
+  const typeOptions = useMemo(
+    () => [...new Set(sites.map((site) => site.constructionType).filter(Boolean))].sort(),
+    [sites]
+  );
+  const technicianOptions = useMemo(
+    () =>
+      [...new Set(sites.flatMap((site) => (site.technicians || []).map((tech) => tech.name)))]
+        .filter(Boolean)
+        .sort((a, b) => a.localeCompare(b, 'ko')),
+    [sites]
+  );
+
   // Filter sites
   const filteredSites = sites.filter((site) => {
+    if (
+      !matchesFilters(filters, {
+        // 시공일 기준입니다 — 접수일이 아니라 현장에 간 날로 찾는 것이 자연스럽습니다.
+        date: site.constructionDate,
+        constructionType: site.constructionType,
+        technicians: (site.technicians || []).map((tech) => tech.name).join(' '),
+        regionGroup: regionGroupOf(site.address),
+      })
+    ) {
+      return false;
+    }
+
     const matchesSearch =
       site.managerName.toLowerCase().includes(searchQuery.toLowerCase()) ||
       site.address.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (site.siteType || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (site.customerName || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (site.customFields || []).some((field) => field.value.toLowerCase().includes(searchQuery.toLowerCase())) ||
       site.constructionDate.includes(searchQuery) ||
       site.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
       (site.notes && site.notes.toLowerCase().includes(searchQuery.toLowerCase()));
@@ -58,11 +91,29 @@ export const AdminSiteList: React.FC<AdminSiteListProps> = ({
     return true;
   });
 
-  // Aggregate stats
-  const totalSites = sites.length;
-  const totalFiles = sites.reduce((sum, s) => sum + s.files.length, 0);
-  const totalPhotos = sites.reduce((sum, s) => sum + s.files.filter((f) => f.fileType === 'image').length, 0);
-  const totalVideos = sites.reduce((sum, s) => sum + s.files.filter((f) => f.fileType === 'video').length, 0);
+  // 집계는 필터를 따라갑니다. 필터를 걸었는데 위 숫자가 전체를 가리키면,
+  // 그 숫자를 그대로 보고서에 옮겨 적는 사람이 생깁니다.
+  const totalSites = filteredSites.length;
+  const totalFiles = filteredSites.reduce((sum, s) => sum + s.files.length, 0);
+  const totalPhotos = filteredSites.reduce((sum, s) => sum + s.files.filter((f) => f.fileType === 'image').length, 0);
+  const totalVideos = filteredSites.reduce((sum, s) => sum + s.files.filter((f) => f.fileType === 'video').length, 0);
+  const narrowed = filteredSites.length !== sites.length;
+
+  /** 지금 보이는 목록을 그대로 엑셀로. 조건은 파일 안에 한 줄로 남깁니다. */
+  const exportExcel = () => {
+    const parts = [
+      filters.from && (filters.from === filters.to ? filters.from : `${filters.from}~${filters.to}`),
+      filters.constructionType,
+      filters.technician,
+      filters.regionGroup,
+      searchQuery && `검색: ${searchQuery}`,
+    ].filter(Boolean);
+    void adminApi.exportRows(
+      'sites',
+      filteredSites,
+      `시공현황 ${filteredSites.length}건${parts.length ? ` · ${parts.join(' · ')}` : ' · 전체'}`
+    );
+  };
 
   return (
     <div className="max-w-7xl mx-auto py-6 sm:py-8 px-4 sm:px-6 lg:px-8">
@@ -103,11 +154,11 @@ export const AdminSiteList: React.FC<AdminSiteListProps> = ({
       {/* Stats Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-6">
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs">
-          <span className="text-xs font-medium text-slate-500">총 등록 현장</span>
+          <span className="text-xs font-medium text-slate-500">{narrowed ? '조회된 현장' : '총 등록 현장'}</span>
           <p className="text-xl sm:text-2xl font-bold text-slate-900 mt-1">{totalSites}개소</p>
         </div>
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs">
-          <span className="text-xs font-medium text-slate-500">총 첨부파일</span>
+          <span className="text-xs font-medium text-slate-500">{narrowed ? '조회된 첨부파일' : '총 첨부파일'}</span>
           <p className="text-xl sm:text-2xl font-bold text-blue-600 mt-1">{totalFiles}개</p>
         </div>
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs">
@@ -119,6 +170,16 @@ export const AdminSiteList: React.FC<AdminSiteListProps> = ({
           <p className="text-xl sm:text-2xl font-bold text-indigo-600 mt-1">{totalVideos}개</p>
         </div>
       </div>
+
+      <RecordFilterBar
+        value={filters}
+        onChange={setFilters}
+        constructionTypes={typeOptions}
+        technicians={technicianOptions}
+        matched={filteredSites.length}
+        total={sites.length}
+        onExport={exportExcel}
+      />
 
       {/* Search & Filter Bar */}
       <div className="bg-white p-3.5 sm:p-4 rounded-xl border border-slate-200 shadow-2xs mb-6 flex flex-col sm:flex-row items-center justify-between gap-3">
@@ -204,6 +265,7 @@ export const AdminSiteList: React.FC<AdminSiteListProps> = ({
               <thead className="bg-slate-50 text-slate-700 font-semibold border-b border-slate-200">
                 <tr>
                   <th className="py-3 px-4">시공일</th>
+                  <th className="py-3 px-4">시공종류</th>
                   <th className="py-3 px-4">현장 주소</th>
                   <th className="py-3 px-4">시공기사</th>
                   <th className="py-3 px-4">첨부파일</th>
@@ -229,6 +291,16 @@ export const AdminSiteList: React.FC<AdminSiteListProps> = ({
                           <Calendar className="w-3.5 h-3.5 text-slate-400" />
                           <span>{site.constructionDate}</span>
                         </div>
+                      </td>
+
+                      {/* 시공종류 — 업체 구분이므로 눈에 먼저 들어와야 합니다. */}
+                      <td className="py-3.5 px-4 whitespace-nowrap">
+                        <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 text-xs font-bold">
+                          {site.constructionType}
+                        </span>
+                        {site.siteType && (
+                          <span className="ml-1 text-[11px] text-slate-400">{site.siteType}</span>
+                        )}
                       </td>
 
                       {/* 현장 주소 & 특이사항 */}
