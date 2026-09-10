@@ -1,0 +1,212 @@
+시공데이터 Azure 배포·운영 사용설명서
+작성일: 2026-09-09
+
+1. 현재 배포 상태와 주소
+
+사이트 주소:
+https://sigongdata-prod-chbed2d7a7eve0gc.koreacentral-01.azurewebsites.net/
+
+서버 상태 확인 주소:
+https://sigongdata-prod-chbed2d7a7eve0gc.koreacentral-01.azurewebsites.net/api/health
+
+작성 시점에 두 주소 모두 HTTP 200 응답을 확인했고 상태 API는 status: ok를
+반환했습니다. 배포 후 런타임 상태 변화가 관측되지 않았다는 CMD 경고가 있었지만
+실제 서버 응답은 확인됐습니다. 로그인, 현장 제출, SharePoint 업로드, Azure
+데이터 저장까지 모두 검증한 것은 아니므로 운영 전에 실제 기능을 확인하세요.
+
+배포 완료 후에는 CMD를 닫거나 PC를 꺼도 Azure 서버는 계속 실행됩니다.
+화면의 배포 소요 시간은 작업 시간이며 사이트 운영 시간이나 결제 타이머가 아닙니다.
+
+2. 현재 Azure 구성과 이중 과금 방지
+
+구독: Azure subscription 1
+지역: Korea Central
+리소스 그룹: sigongdata-prod
+App Service(웹앱): sigongdata-prod
+기존 App Service 요금제: ASP-sigongdataprod-8702 (Linux B1)
+Storage Account(업무 데이터 저장소): stsigongprod
+
+infra/resources.bicep는 위 기존 요금제를 existing으로 참조합니다.
+새 App Service 요금제를 생성하는 리소스 정의는 없습니다.
+기존 요금제를 삭제하지 마세요. 이 요금제에 웹앱이 연결되어 있습니다.
+이름만 바꿔 새 요금제를 만드는 식으로 변경하지 마세요.
+
+Azure Portal → App Service → sigongdata-prod → 개요에서 연결 요금제를 확인합니다.
+리소스 그룹 → sigongdata-prod → 개요의 리소스 목록에서도 요금제 수를 확인합니다.
+다른 요금제가 보이면 연결 앱과 비용을 확인한 후 정리 여부를 결정합니다.
+
+B1 비용은 사이트를 사용하지 않거나 App Service를 중지해도 발생합니다.
+저장소, Application Insights 등은 B1과 별도 비용이 발생할 수 있습니다.
+비용 확인: 구독 → 비용 관리 → 비용 분석 → 리소스별로 그룹화.
+청구/결제 확인: 비용 관리 + 청구 → 해당 청구 계정 → 청구서/결제 방법.
+기여자 권한과 청구 정보 열람 권한은 다를 수 있습니다.
+
+3. 다음 날 CMD에서 시작하기
+
+아래 명령은 PowerShell 창이 아닌 CMD에 한 줄씩 입력하는 예시입니다.
+
+cd /d C:\Dev\sigongdata
+azd env select prod
+
+로그인이 만료됐거나 권한이 변경됐을 때:
+azd auth logout
+azd auth login
+
+배포 계정은 euro157@eurotechcorp.onmicrosoft.com입니다.
+일반 코드 배포마다 로그아웃/로그인을 반복할 필요는 없습니다.
+기존 비밀번호 해시, 세션 시크릿을 다시 생성할 필요도 없습니다.
+
+4. 화면·기능 등 소스 코드를 수정해서 업데이트하기
+
+코드 수정 → 변경 기능 확인 → 아래 명령 실행:
+
+cd /d C:\Dev\sigongdata
+azd env select prod
+azd deploy
+
+azure.yaml의 prepackage 작업이 의존성을 설치하고 배포 패키지를 만듭니다.
+배포할 때 로컬 파일을 다시 읽으므로 CMD를 새로 열 필요는 없습니다.
+최종 성공 메시지가 나오고 C:\Dev\sigongdata>로 돌아올 때까지 기다립니다.
+오류가 발생하면 마지막 오류를 확인하고 같은 명령을 여러 창에서 동시에 실행하지 않습니다.
+
+완료 후 사이트 새로고침, 로그인, 수정한 기능을 확인합니다.
+배포 성공과 모든 업무 기능의 정상 작동은 별도 확인 항목입니다.
+
+5. 환경변수와 Azure 리소스 설정을 수정하기
+
+코드로 구현할 수 있습니다. 변경 대상에 따라 파일과 명령이 다릅니다.
+
+- 화면/서버 동작: apps/sigong-upload, packages → azd deploy
+- Azure 웹앱 환경변수/저장소/관리 ID/역할: infra/*.bicep → 검토 후 azd up
+- 배포 과정/패키징: azure.yaml 및 apps/sigong-upload/scripts
+- GitHub 자동 배포: .github/workflows/deploy-sigong-upload.yml
+- 기존 B1 등급 변경: 현재 요금제는 참조만 하므로 infra의 SKU 수정으로 변경되지 않음.
+  Portal의 해당 요금제에서 규모 확장으로 변경하거나 별도의 관리 명령을 사용해야 함.
+
+azd up은 인프라 설정 적용과 코드 배포를 함께 수행합니다.
+코드만 바꿀 때는 azd deploy를 사용합니다.
+
+로컬 환경변수 파일: apps/sigong-upload/.env
+azd 환경 파일: .azure/prod/.env
+Azure 웹앱의 환경변수: Portal → App Service → 설정 → 환경 변수
+세 위치는 항상 자동 동기화되는 것이 아닙니다.
+
+기존 복사 스크립트가 지원하는 비밀값 등을 수정한 경우:
+1) apps/sigong-upload/.env 수정
+2) node scripts/azd-env-from-dotenv.mjs
+3) infra/main.parameters.json과 resources.bicep에서 전달되는 값인지 확인
+4) azd up으로 Azure 설정에 반영
+
+새 환경변수는 복사 스크립트의 허용 목록과 Bicep 전달 경로도 추가해야 할 수 있습니다.
+azd env set으로 값을 저장하는 것만으로 실행 중인 웹앱 설정이 바뀌지는 않습니다.
+포털에서만 바꾼 설정은 나중에 azd up이 코드에 있는 값으로 되돌릴 수 있으므로
+운영 변경은 코드/환경설정과 함께 관리하세요. 비밀값은 GitHub에 커밋하지 않습니다.
+
+6. 실제 도메인과 주소 설정 주의사항
+
+현재 기본 도메인은 해시와 지역을 포함하는 긴 주소입니다. 문자를 임의로 지운
+sigongdata-prod.azurewebsites.net을 같은 사이트 주소라고 가정하면 안 됩니다.
+정확한 주소는 Portal의 웹앱 개요 → 기본 도메인 또는 azd 배포 결과에서 확인합니다.
+
+현재 infra/resources.bicep의 APP_URL, MICROSOFT_REDIRECT_URI,
+GOOGLE_REDIRECT_URI는 짧은 azurewebsites.net 주소를 조합하는 코드가 남아 있습니다.
+Microsoft/Google 로그인 연동을 운영하기 전에 실제 기본 도메인 또는 최종
+사용자 지정 도메인으로 이 값과 공급자에 등록한 리디렉션 URI를 일치시켜야 합니다.
+페이지가 열린다는 사실만으로 외부 로그인까지 정상이라는 뜻은 아닙니다.
+
+주소 단순화 방법:
+- 회사가 소유한 도메인이 있으면 그 하위 주소(예: sigong.회사도메인)를 연결할 수 있음.
+  보통 새 도메인 구매는 필요 없고 회사 DNS 관리자의 설정이 필요함.
+- 무료 단축 URL 서비스를 사용하면 공유 링크는 짧아지지만 접속 후 주소창은 원래
+  Azure 주소로 바뀜. 무료 조건과 링크 유지 정책은 제공 서비스마다 다름.
+- 브라우저 즐겨찾기나 QR 코드로 주소를 직접 입력하지 않게 할 수도 있음.
+- 독립적인 새 도메인을 소유하려면 일반적으로 구매/갱신 비용이 발생함.
+
+사용자 지정 도메인: App Service → 사용자 지정 도메인 → 추가 및 DNS 소유권 확인.
+HTTPS 인증서 연결과 외부 로그인 콜백 주소도 함께 확인해야 합니다.
+주소를 짧게 만들 목적으로 기존 앱/요금제를 먼저 삭제하지 마세요.
+
+7. 포털에서 사이트 상태·로그·중지 확인
+
+리소스 그룹 개요와 웹앱 개요는 서로 다른 화면입니다.
+리소스 그룹은 웹앱, 저장소, 요금제 등을 모아 둔 관리 단위입니다.
+사이트 제어는 리소스 목록에서 유형이 App Service인 sigongdata-prod를 엽니다.
+
+- 접속: App Service → 개요 → 찾아보기 또는 기본 도메인
+- 중지/시작/다시 시작: App Service → 개요 → 해당 버튼
+- 서버 오류: App Service → 모니터링 → 로그 스트림
+  로그가 없으면 App Service 로그 설정을 확인합니다.
+- 코드 배포 기록: App Service → 배포 센터 → 로그
+- 인프라 배포 기록: 리소스 그룹 → 배포 (개요의 성공/실패 링크로도 접근 가능)
+- 설정값: App Service → 설정 → 환경 변수
+- 관리 ID: App Service → 설정 → ID → 시스템 할당
+
+앱을 중지하면 접속과 진행 중인 백그라운드 작업도 중단될 수 있습니다.
+중지는 삭제가 아니며 B1 비용을 없애는 기능도 아닙니다.
+
+8. 권한 구성
+
+euro157: 구독에서 상속된 기여자 역할 유지.
+sigongdata-prod 범위: Role Based Access Control Administrator 추가.
+조건: 저장소 테이블 데이터 기여자 역할을 서비스 주체에게 할당 가능.
+역할 ID: 0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3
+
+조건 수정은 소유자 euro001 계정으로 수행합니다.
+포털 경로: 리소스 그룹 → sigongdata-prod → 액세스 제어(IAM) → 역할 할당
+→ euro157의 RBAC 관리자 행 → 조건 보기/편집.
+
+배포 코드는 웹앱 관리 ID에 저장소 테이블 데이터 기여자 역할을 부여합니다.
+이는 현장, 주문, 업로드 이력, 문제 기록, 관리자 및 설정 데이터를 위한 권한입니다.
+SharePoint 파일 업로드 권한은 별도의 Microsoft Graph 설정입니다.
+Azure Tables 연결 실패 시 로컬 JSON으로 대체되는 코드가 있으므로 운영 진단에서
+실제로 AZURE_TABLES 저장소를 사용하는지도 확인해야 합니다.
+
+조건부 권한이 있다는 azd 경고 자체는 실패가 아닙니다.
+실제 AuthorizationFailed/ABAC 오류가 나오면 범위, 허용 역할, 대상 유형을 확인합니다.
+
+9. GitHub 푸시 자동 배포
+
+GitHub Actions로 main 푸시 → 빌드 → 기존 App Service 갱신을 구현할 수 있습니다.
+현재 workflow 파일은 있으나 인증 설정과 실제 GitHub 활성 상태는 확인하지 않았습니다.
+workflow의 배포 패키지 구조가 현재 azd 방식과 달라 통일한 뒤 사용해야 합니다.
+따라서 지금은 GitHub에 푸시하면 운영 사이트가 자동 갱신된다고 가정하지 않습니다.
+현재는 로컬에서 azd deploy가 확인된 배포 경로입니다.
+
+자동 배포 연결 시 확인할 항목:
+- Azure 인증(OIDC 또는 배포 프로필) 및 GitHub 권한
+- 현재 server.cjs 시작 명령과 맞는 패키지 폴더 구조
+- main 브랜치, 파일 경로 필터, production 환경 승인 여부
+- 기존 sigongdata-prod 앱을 대상으로 하며 요금제 생성은 하지 않는지
+- 코드 배포와 인프라 변경을 구분하는지
+
+10. 이번에 발생한 오류와 해결 기록
+
+PowerShell 실행 정책 차단:
+현재 CurrentUser RemoteSigned로 변경 완료. 매번 재설정하지 않습니다.
+PowerShell 7 부재 경고는 5.1로 대체 실행됐다는 뜻입니다.
+
+역할 할당 권한 부족:
+소유자가 리소스 그룹 범위의 조건부 RBAC 관리자 역할을 설정.
+
+배포할 리소스 그룹을 찾지 못함:
+azd env set AZURE_RESOURCE_GROUP sigongdata-prod
+azd deploy
+위 명령으로 재개했으며 infra/main.bicep에도 환경 태그/그룹 이름 출력을 추가했습니다.
+
+배포 완료 후 실행 상태 관측 경고:
+최종 SUCCESS와 별도로 실제 사이트 및 /api/health 응답 확인.
+현재 둘 다 200 확인. 이후 오류는 포털 로그 스트림에서 확인합니다.
+
+11. 삭제 및 백업
+
+azd down은 환경 리소스를 삭제하는 명령입니다. 재시작/업데이트용이 아닙니다.
+현재 그룹에는 기존 앱과 B1 요금제도 있으므로 초기화 목적으로 실행하지 마세요.
+저장소/리소스 그룹/요금제 삭제 전에 데이터 백업과 연결 관계를 확인해야 합니다.
+소스 코드 백업과 업무 데이터 백업은 별개입니다.
+.env, 서비스 계정 키 등은 안전하게 보관하되 저장소에 커밋하거나 공유하지 않습니다.
+
+참고 문서
+https://learn.microsoft.com/en-us/azure/developer/azure-developer-cli/manage-environment-variables
+https://learn.microsoft.com/en-us/azure/app-service/app-service-plan-manage
+https://learn.microsoft.com/en-us/azure/app-service/deploy-github-actions
+https://learn.microsoft.com/en-us/azure/app-service/app-service-web-tutorial-custom-domain

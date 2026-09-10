@@ -14,9 +14,9 @@ on:
   workflow_dispatch:
 
 env:
-  NODE_VERSION: '20.x'
+  NODE_VERSION: '22.x'
   # Must match the App Service name created in docs/azure-deployment.md.
-  AZURE_WEBAPP_NAME: sigong-upload
+  AZURE_WEBAPP_NAME: sigongdata-prod
 
 concurrency:
   # A newer commit supersedes an in-flight deploy rather than racing it.

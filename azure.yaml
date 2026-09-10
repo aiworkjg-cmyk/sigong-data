@@ -1,0 +1,37 @@
+# Azure Developer CLI (azd) 정의.
+#
+# 이 파일 하나로 "무엇을 만들고 무엇을 배포하는가" 가 끝납니다.
+# 포털에서 클릭하던 일이 `azd up` 한 줄이 되고, 그 설정이 저장소에 남습니다.
+#
+#   azd auth login     한 번만
+#   azd up             인프라 생성 + 앱 배포
+#   azd deploy         코드만 다시 올릴 때
+#   azd down           만든 것 전부 삭제
+
+name: sigongdata
+metadata:
+  template: sigongdata@1.0.0
+
+infra:
+  provider: bicep
+  path: infra
+
+services:
+  web:
+    # infra/resources.bicep 의 azd-service-name 태그와 짝입니다.
+    project: .
+    language: js
+    host: appservice
+    # 배포되는 것은 저장소 전체가 아니라 빌드 결과입니다.
+    dist: apps/sigong-upload/deploy
+
+hooks:
+  # 올리기 전에 빌드합니다. 빌드하지 않은 채 배포해 "왜 옛날 화면이 뜨지" 로
+  # 시간을 쓰는 일을 구조적으로 막습니다.
+  prepackage:
+    windows:
+      shell: pwsh
+      run: npm ci; npm run package:azure --workspace @jg/sigong-upload
+    posix:
+      shell: sh
+      run: npm ci && npm run package:azure --workspace @jg/sigong-upload

@@ -1,0 +1,17 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "environmentName": { "value": "${AZURE_ENV_NAME}" },
+    "location": { "value": "${AZURE_LOCATION}" },
+    "adminUsername": { "value": "${ADMIN_USERNAME}" },
+    "adminPasswordHash": { "value": "${ADMIN_PASSWORD_HASH}" },
+    "adminSessionSecret": { "value": "${ADMIN_SESSION_SECRET}" },
+    "sharePointTenantId": { "value": "${SHAREPOINT_TENANT_ID}" },
+    "sharePointClientId": { "value": "${SHAREPOINT_CLIENT_ID}" },
+    "sharePointClientSecret": { "value": "${SHAREPOINT_CLIENT_SECRET}" },
+    "sharePointSiteId": { "value": "${SHAREPOINT_SITE_ID}" },
+    "sharePointDriveId": { "value": "${SHAREPOINT_DRIVE_ID}" },
+    "googleServiceAccountJson": { "value": "${GOOGLE_SERVICE_ACCOUNT_JSON}" }
+  }
+}

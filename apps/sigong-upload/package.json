@@ -12,7 +12,8 @@
     "start": "node dist/server.cjs",
     "lint": "tsc --noEmit",
     "test": "tsx --test server/graph-storage-target.test.ts server/manual-upload-reconciler.test.ts server/settings.test.ts server/order-import.test.ts server/work-orders.test.ts",
-    "hash-password": "tsx scripts/hash-password.ts"
+    "hash-password": "tsx scripts/hash-password.ts",
+    "package:azure": "npm run build && node scripts/package-for-azure.mjs"
   },
   "dependencies": {
     "@azure/data-tables": "^13.3.0",
