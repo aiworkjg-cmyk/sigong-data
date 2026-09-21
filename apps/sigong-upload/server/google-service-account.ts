@@ -54,9 +54,38 @@ export function setStoredServiceAccount(raw: string): void {
   cachedExpiresAt = 0;
 }
 
+let envChecked = false;
+let envUsable = '';
+
+/**
+ * 환경변수의 키 — 실제로 쓸 수 있는 형태일 때만 돌려줍니다.
+ *
+ * JSON 한 덩어리를 .env 한 줄이나 배포 도구의 변수에 넣다가 중괄호만 남는
+ * 식으로 잘리는 일이 실제로 있습니다. 그 값이 "설정됨"으로 취급되면 화면에서
+ * 키를 등록하려 할 때 "이미 환경변수가 있다"며 막혀, 어느 쪽으로도 연동할 수
+ * 없는 상태가 됩니다. 읽을 수 없는 값은 없는 값으로 봅니다.
+ */
+function envRaw(): string {
+  if (envChecked) return envUsable;
+  envChecked = true;
+  const raw = config.google.serviceAccount;
+  if (!raw) return '';
+  try {
+    parseServiceAccount(raw);
+    envUsable = raw;
+  } catch (err) {
+    console.error(
+      '[google] GOOGLE_SERVICE_ACCOUNT_JSON 을 읽지 못해 무시합니다. ' +
+        '관리 화면에서 키를 등록할 수 있습니다.',
+      err
+    );
+  }
+  return envUsable;
+}
+
 /** 지금 쓰는 키가 어디서 왔는지. 화면에서 해제 가능 여부를 가릅니다. */
 export function serviceAccountSource(): 'env' | 'stored' | '' {
-  if (config.google.serviceAccount) return 'env';
+  if (envRaw()) return 'env';
   return storedRaw ? 'stored' : '';
 }
 
@@ -67,7 +96,7 @@ export function serviceAccountSource(): 'env' | 'stored' | '' {
  * 곳에서는 파일을 둘 자리가 마땅치 않아 이 형태가 가장 다루기 쉽습니다.
  */
 export function loadServiceAccount(): ServiceAccountKey | null {
-  const raw = config.google.serviceAccount || storedRaw;
+  const raw = envRaw() || storedRaw;
   if (!raw) return null;
   return parseServiceAccount(raw);
 }

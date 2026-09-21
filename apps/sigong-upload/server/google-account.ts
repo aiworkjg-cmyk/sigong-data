@@ -98,7 +98,7 @@ export class GoogleAccountService {
   async saveServiceAccount(raw: string): Promise<GoogleAccountView> {
     const text = (raw || '').trim();
     if (!text) throw new GoogleAuthError('서비스 계정 키(JSON)를 붙여넣어 주세요.');
-    if (config.google.serviceAccount) {
+    if (serviceAccountSource() === 'env') {
       throw new GoogleAuthError(
         '서버 환경변수 GOOGLE_SERVICE_ACCOUNT_JSON 이 이미 설정돼 있습니다. ' +
           '화면에서 등록한 값이 그것을 덮어쓰지 않도록, 바꾸려면 환경변수를 고쳐 주세요.',
