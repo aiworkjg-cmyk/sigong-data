@@ -13,6 +13,8 @@ import { config } from './config';
 import type { SettingsRepository } from './repositories';
 import { TECHNICIAN_TITLES } from '../src/types';
 import { normalizeSubmissionOrder } from '../src/submission-layout';
+import { validateTechnicianImport } from './technician-import';
+import type { SheetTable } from './spreadsheet';
 import type { SubmissionFieldKey } from '../src/submission-layout';
 import type {
   ConstructionTypeConfig,
@@ -414,7 +416,7 @@ export class SettingsService {
     const updated: ConstructionTypeConfig = {
       constructionType: name,
       fields,
-      folderRule: { root, segments },
+      folderRule: { root, segments, fileNameTemplate: validateFileNameTemplate(input.folderRule?.fileNameTemplate ?? existing.folderRule.fileNameTemplate) },
     };
     this.constructionTypeConfigList = [
       ...this.constructionTypeConfigList.filter((entry) => entry.constructionType !== name),
@@ -505,7 +507,8 @@ export class SettingsService {
     const configured = this.constructionTypeConfig(constructionType);
     const selected = configured?.folderRule ?? this.folderRuleValue;
     const root = [this.storageTarget().channelFolder, selected.root].filter(Boolean).join('/');
-    return { ...this.folderRuleValue, ...selected, root, segments: [...selected.segments] };
+    return { ...this.folderRuleValue, ...selected, root, segments: [...selected.segments],
+      fileNameTemplate: selected.fileNameTemplate || this.folderRuleValue.fileNameTemplate };
   }
 
   /* ---------------------------------------------------------------- */
@@ -536,7 +539,16 @@ export class SettingsService {
     return resolved;
   }
 
-  async addTechnician(input: {
+  private rosterWrite: Promise<unknown> = Promise.resolve();
+  private writeRoster<T>(work: () => Promise<T>): Promise<T> {
+    const task = this.rosterWrite.then(work);
+    this.rosterWrite = task.catch(() => undefined);
+    return task;
+  }
+  addTechnician(input: Parameters<SettingsService['addTechnicianUnlocked']>[0]): Promise<Technician> {
+    return this.writeRoster(() => this.addTechnicianUnlocked(input));
+  }
+  private async addTechnicianUnlocked(input: {
     name: string;
     title: string;
     constructionTypes?: string[];
@@ -551,7 +563,7 @@ export class SettingsService {
     if (name.length > MAX_TECHNICIAN_NAME) {
       throw new SettingsError(`이름은 ${MAX_TECHNICIAN_NAME}자 이내로 입력해 주세요.`);
     }
-    if (!title) throw new SettingsError('직함은 팀장 / 사수 / 부사수 중에서 선택해 주세요.');
+    if (!title) throw new SettingsError(`직함은 ${TECHNICIAN_TITLES.join(' / ')} 중에서 선택해 주세요.`);
     // Same name at the same rank is nearly always a double-submit, not twins.
     if (this.technicianList.some((tech) => tech.name === name && tech.title === title)) {
       throw new SettingsError(`이미 등록된 기사입니다. (${name} ${title})`, 409);
@@ -579,7 +591,25 @@ export class SettingsService {
   }
 
   /** Edits a roster entry. Past submissions keep their own name/title snapshot. */
-  async updateTechnician(
+  importTechnicians(table: SheetTable, allowedTypes: string[], createdBy: string): Promise<number> {
+    return this.writeRoster(() => this.importTechniciansUnlocked(table, allowedTypes, createdBy));
+  }
+  private async importTechniciansUnlocked(table: SheetTable, allowedTypes: string[], createdBy: string): Promise<number> {
+    const result = validateTechnicianImport(table, this.technicianList, allowedTypes.filter((type) => this.constructionTypeList.includes(type)));
+    if (result.errors.length) throw new SettingsError(result.errors.join('\n'));
+    const added = result.rows.map((row): Technician => ({ ...row, id: `tech-${crypto.randomBytes(6).toString('hex')}`, createdBy, createdAt: new Date().toISOString() }));
+    const next = [...this.technicianList, ...added];
+    // Persist the complete batch before exposing any newly imported person.
+    await this.repo.set(TECHNICIANS_KEY, JSON.stringify(next));
+    this.technicianList = next;
+    return added.length;
+  }
+
+  /** Edits a roster entry. Past submissions keep their own name/title snapshot. */
+  updateTechnician(id: string, patch: Parameters<SettingsService['updateTechnicianUnlocked']>[1]): Promise<Technician> {
+    return this.writeRoster(() => this.updateTechnicianUnlocked(id, patch));
+  }
+  private async updateTechnicianUnlocked(
     id: string,
     patch: {
       name?: string;
@@ -599,7 +629,7 @@ export class SettingsService {
     if (name.length > MAX_TECHNICIAN_NAME) {
       throw new SettingsError(`이름은 ${MAX_TECHNICIAN_NAME}자 이내로 입력해 주세요.`);
     }
-    if (!title) throw new SettingsError('직함은 팀장 / 사수 / 부사수 중에서 선택해 주세요.');
+    if (!title) throw new SettingsError(`직함은 ${TECHNICIAN_TITLES.join(' / ')} 중에서 선택해 주세요.`);
     if (
       this.technicianList.some(
         (tech) => tech.id !== id && tech.name === name && tech.title === title
@@ -652,7 +682,10 @@ export class SettingsService {
     return [...seen];
   }
 
-  async removeTechnician(id: string): Promise<void> {
+  removeTechnician(id: string): Promise<void> {
+    return this.writeRoster(() => this.removeTechnicianUnlocked(id));
+  }
+  private async removeTechnicianUnlocked(id: string): Promise<void> {
     const remaining = this.technicianList.filter((tech) => tech.id !== id);
     if (remaining.length === this.technicianList.length) {
       throw new SettingsError('등록되지 않은 시공기사입니다.', 404);
@@ -835,7 +868,7 @@ export class SettingsService {
     this.constructionTypeConfigList = this.constructionTypeConfigList.map((entry) =>
       entry.folderRule.root === previous.root &&
       JSON.stringify(entry.folderRule.segments) === JSON.stringify(previous.segments)
-        ? { ...entry, folderRule: { root, segments: [...segments] } }
+        ? { ...entry, folderRule: { ...entry.folderRule, root, segments: [...segments] } }
         : entry
     );
     await this.repo.set(FOLDER_RULE_KEY, JSON.stringify({ root, segments, fileNameTemplate }));
@@ -985,6 +1018,15 @@ function defaultTypeConfig(name: string, rule: FolderRule): ConstructionTypeConf
   };
 }
 
+function validateFileNameTemplate(value: unknown): string | undefined {
+  const template = toKoreanTokens(String(value ?? '').trim().replace(/\s+/g, ' '));
+  if (!template) return undefined;
+  if (template.length > 120 || !template.includes('{번호}') || /[\\/:*?"<>|]/.test(template)) {
+    throw new SettingsError('파일 이름 규칙은 120자 이내이며 {번호}가 필요합니다. \\ / : * ? " < > | 는 사용할 수 없습니다.');
+  }
+  return template;
+}
+
 function cloneTypeConfig(value: ConstructionTypeConfig): ConstructionTypeConfig {
   return {
     ...value,
@@ -1033,6 +1075,7 @@ function parseConstructionTypeConfigs(
       folderRule: {
         root: normalizePath(value.folderRule?.root ?? fallbackRule.root),
         segments: segments.length ? segments : [...fallbackRule.segments],
+        ...(value.folderRule?.fileNameTemplate ? { fileNameTemplate: validateFileNameTemplate(value.folderRule.fileNameTemplate) } : {}),
       },
     };
   });

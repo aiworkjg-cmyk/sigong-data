@@ -66,6 +66,29 @@ export const TechnicianManager: React.FC<TechnicianManagerProps> = ({ session, o
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importPreview, setImportPreview] = useState<Awaited<ReturnType<typeof adminApi.importTechnicians>> | null>(null);
+
+  const readImport = async (file: File | undefined) => {
+    setImportPreview(null); setImportFile(null); setError(null);
+    if (!file) return;
+    if (file.size > 2 * 1024 * 1024) { setError('2MB 이하의 파일을 선택해 주세요.'); return; }
+    setBusy('import');
+    try { const result = await adminApi.importTechnicians(file); setImportFile(file); setImportPreview(result); }
+    catch (err: any) { setError(err.message || '파일 검사 실패'); }
+    finally { setBusy(null); }
+  };
+
+  const commitImport = async () => {
+    if (!importFile) return;
+    setBusy('import'); setError(null);
+    try {
+      const result = await adminApi.importTechnicians(importFile, true);
+      setTechnicians(result.technicians ?? []); setNotice(`기사 ${result.count}명을 등록했습니다.`);
+      setImportFile(null); setImportPreview(null); onChanged?.();
+    } catch (err: any) { setError(err.message || '가져오기 실패'); }
+    finally { setBusy(null); }
+  };
 
   const [isComposing, setIsComposing] = useState(false);
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
@@ -77,6 +100,11 @@ export const TechnicianManager: React.FC<TechnicianManagerProps> = ({ session, o
   const [filterTitle, setFilterTitle] = useState<TechnicianTitle | ''>('');
   const [filterType, setFilterType] = useState('');
   const [search, setSearch] = useState('');
+
+  /** 일괄 작업 대상. 여러 명의 직함·지역을 한 번에 바꾸거나 지울 때 씁니다. */
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkTitle, setBulkTitle] = useState<TechnicianTitle | ''>('');
+  const [bulkRegion, setBulkRegion] = useState('');
 
   const mayDelete = canDeleteTechnicians(session.role);
   const master = isMaster(session.role);
@@ -140,6 +168,107 @@ export const TechnicianManager: React.FC<TechnicianManagerProps> = ({ session, o
   useEffect(() => {
     void load();
   }, [load]);
+
+  // 필터가 바뀌어 안 보이게 된 사람은 선택에서 뺍니다. 화면에 없는 사람이
+  // 일괄 삭제에 조용히 섞여 들어가면 되돌릴 수 없는 사고가 됩니다.
+  useEffect(() => {
+    const shown = new Set(visible.map((tech) => tech.id));
+    setSelectedIds((current) => {
+      const next = new Set([...current].filter((id) => shown.has(id)));
+      return next.size === current.size ? current : next;
+    });
+  }, [visible]);
+
+  const toggleSelect = (id: string) =>
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  /**
+   * 고른 사람들의 직함·지역을 한 번에 바꿉니다.
+   *
+   * 비워 둔 칸은 건드리지 않습니다 — 직함만 바꾸려는데 지역이 빈 값으로
+   * 덮이면, 한 번의 클릭으로 여러 명의 지역이 사라집니다.
+   *
+   * 한 명씩 차례로 보냅니다. 한꺼번에 보내면 저장소에 동시에 쓰면서 순서가
+   * 꼬이고, 실패했을 때 누가 안 바뀌었는지 알 수 없습니다.
+   */
+  const handleBulkUpdate = async () => {
+    const patch: { title?: string; region?: string } = {};
+    if (bulkTitle) patch.title = bulkTitle;
+    if (bulkRegion.trim()) patch.region = bulkRegion.trim();
+    if (selectedIds.size === 0 || Object.keys(patch).length === 0) return;
+
+    setBusy('bulk');
+    setError(null);
+    const failed: string[] = [];
+    let latest: Technician[] | null = null;
+    for (const id of selectedIds) {
+      try {
+        const { technicians: list } = await adminApi.updateTechnician(id, patch);
+        latest = list;
+      } catch (err: any) {
+        const name = technicians.find((tech) => tech.id === id)?.name ?? id;
+        failed.push(`${name}: ${err?.message || '실패'}`);
+      }
+    }
+    if (latest) setTechnicians(latest);
+    onChanged?.();
+    setBusy(null);
+
+    const done = selectedIds.size - failed.length;
+    if (failed.length > 0) {
+      setError(`${done}명 수정, ${failed.length}명 실패 — ${failed.join(' / ')}`);
+    } else {
+      setNotice(`${done}명의 정보를 일괄 수정했습니다.`);
+      setSelectedIds(new Set());
+      setBulkTitle('');
+      setBulkRegion('');
+    }
+  };
+
+  /** 고른 사람들을 한 번에 지웁니다. 마스터만 가능합니다. */
+  const handleBulkDelete = async () => {
+    if (selectedIds.size === 0 || !mayDelete) return;
+    const names = technicians
+      .filter((tech) => selectedIds.has(tech.id))
+      .map((tech) => `${tech.name}(${tech.title})`);
+    if (
+      !window.confirm(
+        `${names.length}명을 명부에서 삭제할까요?\n\n${names.join(', ')}\n\n되돌릴 수 없습니다.`
+      )
+    ) {
+      return;
+    }
+
+    setBusy('bulk');
+    setError(null);
+    const failed: string[] = [];
+    let latest: Technician[] | null = null;
+    for (const id of selectedIds) {
+      try {
+        const { technicians: list } = await adminApi.deleteTechnician(id);
+        latest = list;
+      } catch (err: any) {
+        const name = technicians.find((tech) => tech.id === id)?.name ?? id;
+        failed.push(`${name}: ${err?.message || '실패'}`);
+      }
+    }
+    if (latest) setTechnicians(latest);
+    onChanged?.();
+    setBusy(null);
+
+    const done = selectedIds.size - failed.length;
+    if (failed.length > 0) {
+      setError(`${done}명 삭제, ${failed.length}명 실패 — ${failed.join(' / ')}`);
+    } else {
+      setNotice(`${done}명을 명부에서 삭제했습니다.`);
+    }
+    setSelectedIds(new Set());
+  };
 
   const handleAdd = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -292,6 +421,25 @@ export const TechnicianManager: React.FC<TechnicianManagerProps> = ({ session, o
         </Banner>
       )}
 
+      <section className="bg-white border border-slate-200 rounded-xl p-4 mb-5">
+        <h3 className="font-bold text-sm mb-2">엑셀로 기사 일괄 등록</h3>
+        <p className="text-xs text-slate-600 mb-3">첫 번째 시트에 이름·직책·시공종류·연락처·담당지역을 입력하세요. 시공종류는 쉼표로 구분합니다. 기존 기사는 덮어쓰지 않습니다. 오류가 있으면 전체 등록을 보류합니다.</p>
+        <p className="text-xs text-slate-600 mb-3">입력 가능한 시공종류: {assignableTypes.join(', ') || '없음'}</p>
+        <div className="flex flex-wrap gap-3 items-center">
+          <a href="/templates/시공기사_등록양식.xlsx" download className="border rounded-lg px-3 py-2 text-xs font-bold text-blue-700">엑셀 양식 다운로드</a>
+          <input aria-label="기사 엑셀 업로드" type="file" accept=".xlsx,.csv" disabled={busy !== null} onChange={(event) => { void readImport(event.target.files?.[0]); event.target.value = ''; }} className="text-xs max-w-full" />
+          {busy === 'import' && <span role="status" className="text-xs">파일 처리 중…</span>}
+        </div>
+        {importPreview && <div className="mt-3">
+          {!!importPreview.errors?.length ? <div role="alert" className="text-xs text-red-700 whitespace-pre-wrap max-h-48 overflow-auto">{importPreview.errors.join('\n')}</div> : <>
+            <p className="text-xs font-bold mb-2">{importFile?.name}: {importPreview.count}명 등록 예정 (저장 전 미리보기)</p>
+            <div className="max-h-64 overflow-auto"><table className="text-xs w-full"><thead><tr>{['이름', '직책', '시공종류', '연락처', '담당지역'].map((label) => <th key={label} className="text-left p-2">{label}</th>)}</tr></thead><tbody>{importPreview.rows?.map((row, index) => <tr key={index} className="border-t"><td className="p-2">{row.name}</td><td>{row.title}</td><td>{row.constructionTypes.join(', ')}</td><td>{row.phone}</td><td>{row.region}</td></tr>)}</tbody></table></div>
+            <button type="button" onClick={() => void commitImport()} disabled={busy !== null} className="mt-3 bg-blue-600 text-white rounded-lg px-4 py-2 text-xs font-bold disabled:opacity-50">검사한 {importPreview.count}명 등록</button>
+          </>}
+          <button type="button" disabled={busy !== null} onClick={() => { setImportPreview(null); setImportFile(null); }} className="ml-3 text-xs underline">취소</button>
+        </div>}
+      </section>
+
       {isComposing && (
         <form
           onSubmit={handleAdd}
@@ -364,6 +512,84 @@ export const TechnicianManager: React.FC<TechnicianManagerProps> = ({ session, o
         </span>
       </div>
 
+      {/* 일괄 작업. 고른 사람이 있을 때만 수정·삭제 칸이 열립니다. */}
+      <div className="flex flex-wrap items-center gap-2 mb-2 px-1">
+        <label className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-600">
+          <input
+            type="checkbox"
+            checked={visible.length > 0 && selectedIds.size === visible.length}
+            ref={(node) => {
+              if (node) node.indeterminate = selectedIds.size > 0 && selectedIds.size < visible.length;
+            }}
+            onChange={() =>
+              setSelectedIds(
+                selectedIds.size === visible.length
+                  ? new Set()
+                  : new Set(visible.map((tech) => tech.id))
+              )
+            }
+            className="w-4 h-4 accent-blue-600"
+          />
+          전체 선택
+        </label>
+
+        {selectedIds.size > 0 && (
+          <>
+            <span className="text-xs font-bold text-blue-700">{selectedIds.size}명 선택됨</span>
+
+            <select
+              value={bulkTitle}
+              onChange={(event) => setBulkTitle(event.target.value as TechnicianTitle | '')}
+              className="px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white text-xs"
+              aria-label="바꿀 직함"
+            >
+              <option value="">직함 유지</option>
+              {TECHNICIAN_TITLES.map((title) => (
+                <option key={title} value={title}>
+                  {title}
+                </option>
+              ))}
+            </select>
+
+            <input
+              value={bulkRegion}
+              onChange={(event) => setBulkRegion(event.target.value)}
+              placeholder="지역 (비우면 유지)"
+              className="w-36 px-2.5 py-1.5 rounded-lg border border-slate-300 text-xs"
+            />
+
+            <button
+              type="button"
+              onClick={() => void handleBulkUpdate()}
+              disabled={busy === 'bulk' || (!bulkTitle && !bulkRegion.trim())}
+              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-blue-600 text-white text-xs font-bold disabled:opacity-40"
+            >
+              {busy === 'bulk' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
+              일괄 수정
+            </button>
+
+            {mayDelete && (
+              <button
+                type="button"
+                onClick={() => void handleBulkDelete()}
+                disabled={busy === 'bulk'}
+                className="px-3 py-1.5 rounded-lg bg-rose-600 text-white text-xs font-bold disabled:opacity-40"
+              >
+                선택 삭제
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={() => setSelectedIds(new Set())}
+              className="px-2 py-1.5 text-xs font-semibold text-slate-500 underline"
+            >
+              선택 해제
+            </button>
+          </>
+        )}
+      </div>
+
       <div className="bg-white rounded-2xl border border-slate-200 divide-y divide-slate-100 overflow-hidden">
         {visible.length === 0 && !isLoading ? (
           <p className="py-16 text-center text-xs text-slate-400">
@@ -413,7 +639,19 @@ export const TechnicianManager: React.FC<TechnicianManagerProps> = ({ session, o
             }
 
             return (
-              <div key={tech.id} className="flex items-start gap-2.5 px-3 sm:px-4 py-3">
+              <div
+                key={tech.id}
+                className={`flex items-start gap-2.5 px-3 sm:px-4 py-3 ${
+                  selectedIds.has(tech.id) ? 'bg-blue-50/60' : ''
+                }`}
+              >
+                <input
+                  type="checkbox"
+                  checked={selectedIds.has(tech.id)}
+                  onChange={() => toggleSelect(tech.id)}
+                  aria-label={`${tech.name} 선택`}
+                  className="w-4 h-4 mt-3 shrink-0 accent-blue-600"
+                />
                 <span className={`w-1.5 h-10 rounded-full shrink-0 mt-0.5 ${style.accent}`} />
 
                 <div className="flex-1 min-w-0">

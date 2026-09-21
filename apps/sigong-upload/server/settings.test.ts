@@ -13,6 +13,21 @@ class MemorySettings implements SettingsRepository {
   async set(key: string, value: string) { this.values.set(key, value); }
 }
 
+test('종류별 파일 이름은 공통 변경 후에도 유지되고 비우면 공통 규칙으로 복귀한다', async () => {
+ const repo = new MemorySettings(); const settings = new SettingsService(repo); await settings.load();
+ await settings.setFolderRule({root:'자료',segments:['{시공종류}'],fileNameTemplate:'공통_{번호}'});
+ await settings.saveFolderRuleAsDefault();
+ await settings.setConstructionTypeConfig('백조', {folderRule:{root:'자료',segments:['{시공종류}'],fileNameTemplate:'백조_{종류}_{번호}'}});
+ await settings.setFolderRule({root:'새자료',segments:['{시공종류}'],fileNameTemplate:'새공통_{번호}'});
+ assert.equal(settings.effectiveFolderRule('백조').fileNameTemplate, '백조_{종류}_{번호}');
+ const reloaded = new SettingsService(repo); await reloaded.load();
+ assert.equal(reloaded.effectiveFolderRule('백조').fileNameTemplate, '백조_{종류}_{번호}');
+ assert.equal(reloaded.folderRuleDefault()?.fileNameTemplate, '공통_{번호}');
+ await reloaded.setConstructionTypeConfig('백조', {folderRule:{...reloaded.constructionTypeConfig('백조')!.folderRule,fileNameTemplate:''}});
+ assert.equal(reloaded.effectiveFolderRule('백조').fileNameTemplate, '새공통_{번호}');
+ await assert.rejects(reloaded.setConstructionTypeConfig('백조', {folderRule:{root:'자료',segments:['{시공종류}'],fileNameTemplate:'중복이름'}}), /번호/);
+});
+
 test('시공종류별 필드와 Teams 채널 경로를 한 규칙으로 결합한다', async () => {
   const settings = new SettingsService(new MemorySettings());
   await settings.load();

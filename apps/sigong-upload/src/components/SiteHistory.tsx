@@ -14,7 +14,7 @@ import { statusMeta } from '../status';
 import { titleStyle } from '../technicians';
 import { typeStyle } from '../constructionTypes';
 import { DateRangeInput } from './DateRangeInput';
-import { ROLE_LABELS } from '../types';
+import { ROLE_LABELS, TECHNICIAN_TITLES } from '../types';
 import type { AdminSession, SiteRecord, Technician } from '../types';
 
 interface SiteHistoryProps {
@@ -350,7 +350,9 @@ export const SiteHistory: React.FC<SiteHistoryProps> = ({ session, onOpenSite })
       {sites.length > 0 && session.role !== 'TECH' && (
         <div className="mt-3 flex flex-wrap items-center gap-1.5 text-[11px] text-slate-400">
           <span className="font-semibold">직함:</span>
-          {(['팀장', '사수', '부사수'] as const).map((title) => (
+          {/* 직함 목록은 한 곳(TECHNICIAN_TITLES)에서만 옵니다. 여기 따로 적어 두면
+              직함을 추가할 때 이 필터만 빠뜨려, 새 직함의 제출 기록을 걸러 볼 수 없게 됩니다. */}
+          {TECHNICIAN_TITLES.map((title) => (
             <span
               key={title}
               className={`px-1.5 py-0.5 rounded border font-bold ${titleStyle(title).chip}`}

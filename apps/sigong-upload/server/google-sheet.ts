@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import { buildDrafts, cancelReason, detectMapping, EMPTY_MAPPING } from './order-import';
 import { parseCsv, toTable } from './spreadsheet';
 import type { WorkbookSheet } from './spreadsheet';
+import { serviceAccountEmail } from './google-service-account';
 import { cleanText } from './util';
 import type { SettingsRepository } from './repositories';
 import type { WorkOrderService } from './work-orders';
@@ -144,6 +145,27 @@ export class GoogleSheetService {
 
     const id = String(input.id || '').trim() || `sheet-${crypto.randomBytes(5).toString('hex')}`;
     const existing = this.links.find((link) => link.id === id);
+
+    // 같은 문서를 두 번 등록하는 것만 막습니다.
+    //
+    // 한 업체가 시트를 여러 장 쓰는 것은 정상입니다(백조1 · 백조2). 하지만
+    // 같은 문서를 탭만 바꿔 두 번 넣는 것은 다릅니다 — 인증된 연동은 문서의
+    // 모든 탭을 읽으므로, 두 연동이 완전히 같은 주문을 가져오게 됩니다.
+    const documentId = GoogleSheetService.spreadsheetId(url);
+    const twin = this.links.find((link) => {
+      if (link.id === id) return false;
+      try {
+        return GoogleSheetService.spreadsheetId(link.url) === documentId;
+      } catch {
+        return false;
+      }
+    });
+    if (twin) {
+      throw new GoogleSheetError(
+        `이 시트는 이미 "${twin.label}" 로 연동돼 있습니다. ` +
+          '탭이 여러 개라면 연동 하나가 모든 탭을 함께 읽으므로 따로 등록하지 않아도 됩니다.'
+      );
+    }
     if (!existing && this.links.length >= MAX_LINKS) {
       throw new GoogleSheetError(`연동 시트는 최대 ${MAX_LINKS}개까지 등록할 수 있습니다.`);
     }
@@ -235,7 +257,9 @@ export class GoogleSheetService {
       const detail = (await meta.json().catch(() => ({}))) as { error?: { message?: string } };
       throw new GoogleSheetError(
         meta.status === 403 || meta.status === 404
-          ? '이 시트를 읽을 권한이 없습니다. 시트를 아래 계정 주소로 [공유] 해 주세요.'
+          ? '이 시트를 읽을 권한이 없습니다. 구글시트에서 [공유] 를 누르고 ' +
+            (serviceAccountEmail() || '연결된 계정 주소') +
+            ' 를 뷰어로 추가한 뒤 다시 시도해 주세요.'
           : detail.error?.message || `시트 정보를 읽지 못했습니다 (HTTP ${meta.status}).`,
         502
       );
@@ -331,11 +355,14 @@ export class GoogleSheetService {
         return parseCsv(text);
       }
 
+      const robot = serviceAccountEmail();
       throw new GoogleSheetError(
         [
           '시트를 읽지 못했습니다. 아래 중 하나만 해 주시면 됩니다.',
-          '① (권장) 이 화면의 [Google 계정 연결] — 한 번 로그인하면 시트마다 설정할 것이 없습니다.',
-          '② 구글시트 [공유] > "링크가 있는 모든 사용자" > 뷰어',
+          robot
+            ? `① (권장) 구글시트 [공유] 에 ${robot} 를 뷰어로 추가 — 한 번만 하면 됩니다.`
+            : '① (권장) 이 화면 위의 [서비스 계정 키 등록] — 한 번 등록하면 만료 없이 계속 읽습니다.',
+          '② 구글시트 [공유] > "링크가 있는 모든 사용자" > 뷰어 (탭이 여러 개면 첫 탭만 읽힙니다)',
           '③ 그 옵션이 조직 정책으로 막혀 있다면: [파일] > [공유] > [웹에 게시] > 게시',
           `(시도한 경로 — ${failures.join(' / ')})`,
         ].join('\n'),
@@ -423,6 +450,9 @@ export class GoogleSheetService {
           createdBy: `sheet:${link.label}`,
           knownTypes,
           overwriteEdited: false,
+          // 이 건을 어느 연동이 가져왔는지. 같은 업체에 시트가 여럿일 때
+          // 삭제 범위를 가르는 값입니다 — removeMissing 참고.
+          sourceLinkId: link.id,
         });
         keptKeys.push(...(result.keys ?? []));
         report.created += result.created;
@@ -469,10 +499,16 @@ export class GoogleSheetService {
       // 모든 탭을 정상적으로 읽었을 때만 합니다. 한 탭이라도 실패한 회차에
       // 지우면, 못 읽은 탭의 주문이 통째로 사라집니다.
       if (report.failed === 0) {
+        // 한 업체가 시트를 여러 장 쓸 수 있습니다 (백조1 · 백조2 · 백조 10월…).
+        // 그럴 때는 이 연동이 가져온 건만 정리합니다. 시트가 이 하나뿐이면
+        // 범위를 넓혀, 예전에 등록됐거나 해제된 연동이 남긴 건도 함께 치웁니다.
+        const sole =
+          this.links.filter((entry) => entry.constructionType === link.constructionType).length <= 1;
         report.removed = await this.orders.removeMissing({
           constructionType: link.constructionType,
           source: 'GOOGLE_SHEET',
           keys: keptKeys,
+          linkId: sole ? undefined : link.id,
         });
       }
 

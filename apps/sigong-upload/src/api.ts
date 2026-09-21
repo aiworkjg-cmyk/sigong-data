@@ -47,7 +47,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const res = await fetch(path, {
     ...init,
     headers: {
-      ...(init.body ? { 'Content-Type': 'application/json' } : {}),
+      ...(init.body && !(init.body instanceof FormData) ? { 'Content-Type': 'application/json' } : {}),
       ...init.headers,
     },
     // Session cookie must ride along on every admin call.
@@ -132,6 +132,13 @@ export interface Diagnostics {
 }
 
 export const adminApi = {
+  storageStatus: () => request<{ backend: string; account: string; mailConfigured: boolean; sender: string }>('/api/admin/settings/storage-status'),
+  importTechnicians: (file: File, confirm = false) => {
+    const body = new FormData();
+    body.append('file', file);
+    body.append('confirm', String(confirm));
+    return request<{ count: number; errors?: string[]; rows?: Array<{ name: string; title: string; constructionTypes: string[]; phone: string; region: string }>; technicians?: Technician[] }>('/api/admin/technicians/import', { method: 'POST', body });
+  },
   /** Resolves to null when nobody is logged in (not an error). */
   session: () => request<{ session: AdminSession | null }>('/api/admin/session'),
 
@@ -546,6 +553,17 @@ export const adminApi = {
 
   signOutGoogle: () =>
     request<GoogleAccountView>('/api/admin/work-orders/google', { method: 'DELETE' }),
+
+  saveGoogleServiceAccount: (key: string) =>
+    request<GoogleAccountView>('/api/admin/work-orders/google/service-account', {
+      method: 'POST',
+      body: JSON.stringify({ key }),
+    }),
+
+  clearGoogleServiceAccount: () =>
+    request<GoogleAccountView>('/api/admin/work-orders/google/service-account', {
+      method: 'DELETE',
+    }),
 
 
   sheetLinks: () =>

@@ -67,7 +67,11 @@ export class SubmissionWorker {
       this.active += 1;
 
       void this.run(job)
-        .catch((err) => console.error(`[worker] ${job.siteId} 처리 중 예외`, err))
+        .catch(async (err) => {
+          console.error(`[worker] ${job.siteId} 처리 중 예외`, err);
+          const record = await this.repos.sites.get(job.siteId).catch(() => null);
+          if (record) await this.notifyFailure({ ...record, status: 'FAILED', syncMessage: '업로드 처리 중 예외가 발생했습니다.' }, [err?.message || String(err)]);
+        })
         .finally(() => {
           this.active -= 1;
           this.pump();
@@ -132,7 +136,7 @@ export class SubmissionWorker {
         '임시 저장 파일이 남아 있지 않아 재시도할 수 없습니다. 담당자에게 재제출을 요청해 주세요.';
       record.syncedAt = new Date().toISOString();
       await this.repos.sites.save(record);
-      await mailer.notifyQuietly(record, [record.syncMessage]);
+      await this.notifyFailure(record, [record.syncMessage]);
       // This path never reaches the sync step, so without its own call the
       // channel would hear nothing at all about a submission that failed
       // outright — the case most worth hearing about.
@@ -196,10 +200,20 @@ export class SubmissionWorker {
     }
 
     // Out of automatic attempts — hand it to a human.
-    await mailer.notifyQuietly(
+    await this.notifyFailure(
       record,
       sync.failedFiles.map((file) => `${file.fileName}: ${file.error}`)
     );
+  }
+
+  private async notifyFailure(record: SiteRecord, errors: string[]): Promise<void> {
+    try {
+      const order = record.workOrderId ? await this.repos.workOrders.get(record.workOrderId) : null;
+      await mailer.notifyQuietly(record, errors, this.settings.deleteRequestEmails(), order);
+    } catch (error) {
+      console.error('[mail] 주문 상세 조회 또는 알림 실패', error);
+      await mailer.notifyQuietly(record, errors, this.settings.deleteRequestEmails());
+    }
   }
 
   /** Folds one sync result back into the record's file list. */

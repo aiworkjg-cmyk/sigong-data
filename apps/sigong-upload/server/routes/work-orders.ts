@@ -7,6 +7,7 @@ import { requireManager, requireMaster } from '../auth';
 import { scopeOf } from '../admin-directory';
 import { GoogleSheetError, GoogleSheetService } from '../google-sheet';
 import { GoogleAuthError } from '../google-account';
+import { ServiceAccountError } from '../google-service-account';
 import { OcrError, isOcrConfigured, readOrderImage } from '../ocr';
 import { buildDrafts, detectMapping, EMPTY_MAPPING } from '../order-import';
 import { parseCsv, parseWorkbook } from '../spreadsheet';
@@ -79,7 +80,8 @@ export function createWorkOrderRouter(ctx: AppContext): Router {
       err instanceof WorkOrderError ||
       err instanceof OcrError ||
       err instanceof GoogleSheetError ||
-      err instanceof GoogleAuthError
+      err instanceof GoogleAuthError ||
+      err instanceof ServiceAccountError
     ) {
       res.status(err.status).json({ error: '주문서 처리 오류', message: err.message });
       return;
@@ -427,6 +429,30 @@ export function createWorkOrderRouter(ctx: AppContext): Router {
   router.delete('/google', requireMaster, async (_req, res) => {
     await ctx.google.signOut();
     res.json(ctx.google.view());
+  });
+
+  /**
+   * 서비스 계정 키 등록.
+   *
+   * 키 본문은 돌려주지 않습니다 — 저장되면 그때부터 필요한 정보는 계정 주소
+   * 하나뿐이고, 개인키를 화면으로 다시 내보낼 이유가 없습니다.
+   */
+  router.post('/google/service-account', requireMaster, async (req, res) => {
+    try {
+      // cleanText 를 쓰지 않습니다. 키는 4KB 가 넘고 줄바꿈이 의미를 갖습니다.
+      const raw = typeof req.body?.key === 'string' ? req.body.key : '';
+      res.json(await ctx.google.saveServiceAccount(raw));
+    } catch (err) {
+      fail(err, res);
+    }
+  });
+
+  router.delete('/google/service-account', requireMaster, async (_req, res) => {
+    try {
+      res.json(await ctx.google.clearServiceAccount());
+    } catch (err) {
+      fail(err, res);
+    }
   });
 
   router.get('/sheets/links', requireMaster, (_req, res) => {

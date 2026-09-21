@@ -343,7 +343,7 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({ role }) => {
   // 폴더 규칙
   const [root, setRoot] = useState('');
   const [segments, setSegments] = useState<string[]>([]);
-  /** 저장되는 파일 이름 규칙. 폴더 규칙과 달리 공통 하나뿐입니다. */
+  /** 전용 규칙이 없는 시공종류가 사용하는 공통 파일 이름입니다. */
   const [fileNameTemplate, setFileNameTemplate] = useState('');
   const [fileNameTokens, setFileNameTokens] = useState<
     { token: string; label: string; sample: string }[]
@@ -358,6 +358,7 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({ role }) => {
   const [typeConfigs, setTypeConfigs] = useState<ConstructionTypeConfig[]>([]);
   const [selectedType, setSelectedType] = useState('');
   const [typeDraft, setTypeDraft] = useState<ConstructionTypeConfig | null>(null);
+  const [storageStatus, setStorageStatus] = useState<Awaited<ReturnType<typeof adminApi.storageStatus>> | null>(null);
   /** 시공종류별 규칙에서 토큰을 넣을 단계. 공통 규칙과 같은 조작입니다. */
   const [typeSegment, setTypeSegment] = useState(0);
 
@@ -398,6 +399,7 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({ role }) => {
   const [editEmailDraft, setEditEmailDraft] = useState('');
 
   const readOnly = !isMaster(role);
+  useEffect(() => { if (!readOnly) void adminApi.storageStatus().then(setStorageStatus).catch(() => setStorageStatus(null)); }, [readOnly]);
   const currentRule = JSON.stringify({ root, segments });
   const isDirty = currentRule !== savedRule;
 
@@ -409,7 +411,8 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({ role }) => {
    * while the admin is still typing.
    */
   const usesDefaultRule = (entry: ConstructionTypeConfig) =>
-    JSON.stringify({ root: entry.folderRule.root, segments: entry.folderRule.segments }) === savedRule;
+    !entry.folderRule.fileNameTemplate && entry.folderRule.root === JSON.parse(savedRule || '{}').root &&
+    JSON.stringify(entry.folderRule.segments) === JSON.stringify(JSON.parse(savedRule || '{}').segments);
 
   const say = (scope: Scope, kind: 'ok' | 'error', text: string) =>
     setFeedback({ scope, kind, text });
@@ -565,6 +568,12 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({ role }) => {
   const handleSaveAsDefault = async () => {
     setBusy('rule-default');
     try {
+      const result = await adminApi.setFolderRule({ root, segments, fileNameTemplate });
+      setRoot(result.folderRule.root);
+      setSegments(result.folderRule.segments);
+      setFileNameTemplate(result.folderRule.fileNameTemplate ?? '');
+      setSavedRule(JSON.stringify(result.folderRule));
+      setExample(result.example);
       const { savedDefault: stored } = await adminApi.saveFolderRuleAsDefault();
       setSavedDefault(stored);
       say('rule', 'ok', '지금 설정을 기본값으로 저장했습니다. [기본값 불러오기]로 언제든 되돌릴 수 있습니다.');
@@ -585,7 +594,7 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({ role }) => {
       setFileNameTemplate(result.folderRule.fileNameTemplate ?? '');
       setSavedRule(JSON.stringify(result.folderRule));
       setExample(result.example);
-      say('rule', 'ok', '폴더 규칙을 저장했습니다. 다음 제출부터 적용됩니다.');
+      say('rule', 'ok', '폴더·파일 이름 규칙을 저장했습니다. 다음 제출부터 적용됩니다.');
     } catch (err: any) {
       say('rule', 'error', err?.message || '폴더 규칙 저장에 실패했습니다.');
     } finally {
@@ -1647,11 +1656,21 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({ role }) => {
               </div>
             )}
 
+            <div className="rounded-xl border border-slate-200 p-3">
+              <label className="block text-sm font-bold mb-2">{typeDraft.constructionType} 전용 파일 이름</label>
+              <input aria-label="시공종류별 파일 이름 규칙" disabled={readOnly}
+                value={typeDraft.folderRule.fileNameTemplate ?? ''}
+                onChange={(event) => setTypeDraft({ ...typeDraft, folderRule: { ...typeDraft.folderRule, fileNameTemplate: event.target.value } })}
+                placeholder="비우면 공통 파일 이름 사용"
+                className="w-full border rounded-lg p-2 font-mono text-sm" />
+              <p className="mt-2 text-xs text-slate-500">{'{번호}'}를 반드시 포함하세요. 아래 규칙 저장 버튼으로 저장합니다. 비우면 공통 규칙을 따릅니다.</p>
+              <p className="mt-1 text-xs break-all">미리보기: {fillTokens(typeDraft.folderRule.fileNameTemplate || fileNameTemplate || '{폴더명}_{종류}{번호}')}.jpg</p>
+            </div>
             <div className="flex flex-wrap items-center gap-2">
               {!readOnly && !usesDefaultRule(typeDraft) && (
                 <button
                   type="button"
-                  onClick={() => setTypeDraft({ ...typeDraft, folderRule: { root, segments: [...segments] } })}
+                  onClick={() => setTypeDraft({ ...typeDraft, folderRule: { root, segments: [...segments], fileNameTemplate: '' } })}
                   className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-300 text-xs font-semibold text-slate-600"
                 >
                   <RotateCcw className="w-3.5 h-3.5" />
@@ -1661,7 +1680,7 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({ role }) => {
             </div>
             {!readOnly && <button type="button" onClick={() => void handleSaveTypeConfig()} disabled={busy === 'type-config'}
               className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-lg bg-blue-600 text-white text-xs font-bold disabled:opacity-50">
-              {busy === 'type-config' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />} 폴더 규칙 저장
+              {busy === 'type-config' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />} 폴더·파일 이름 규칙 저장
             </button>}
           </div>
         )}
@@ -1832,8 +1851,7 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({ role }) => {
               <button
                 type="button"
                 onClick={() => void handleSaveAsDefault()}
-                disabled={busy === 'rule-default' || isDirty}
-                title={isDirty ? '먼저 저장한 뒤에 기본값으로 지정할 수 있습니다.' : undefined}
+                disabled={busy !== null}
                 className="inline-flex items-center gap-1.5 px-3 py-2.5 rounded-lg border border-blue-300 bg-blue-50 disabled:opacity-50 text-xs font-bold text-blue-700"
               >
                 {busy === 'rule-default' ? (
@@ -1864,6 +1882,7 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({ role }) => {
                 onClick={() => {
                   setRoot(DEFAULT_RULE.root);
                   setSegments([...DEFAULT_RULE.segments]);
+                  setFileNameTemplate('{폴더명}_{종류}{번호}');
                 }}
                 className="inline-flex items-center gap-1.5 px-3 py-2.5 rounded-lg border border-slate-300 hover:bg-slate-50 text-xs font-semibold text-slate-700"
               >
@@ -1882,13 +1901,18 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({ role }) => {
         {/* ------------------- 저장 파일 이름 규칙 ------------------- */}
         <div className="mt-4 border-t border-slate-100 pt-4">
           <h4 className="text-sm font-bold text-slate-900 mb-1">저장되는 파일 이름</h4>
+          {!readOnly && <div className="flex flex-wrap gap-2 my-3">
+            <button type="button" disabled={busy !== null} onClick={() => void handleSaveRule()} className="rounded-lg px-4 py-2 bg-blue-600 text-white text-xs font-bold disabled:opacity-50">폴더·파일 이름 저장</button>
+            <button type="button" disabled={busy !== null} onClick={() => void handleSaveAsDefault()} className="rounded-lg px-4 py-2 border border-blue-300 text-blue-700 text-xs font-bold disabled:opacity-50">현재 설정을 기본값으로 저장</button>
+            {savedDefault && <button type="button" onClick={() => { setRoot(savedDefault.root); setSegments([...savedDefault.segments]); setFileNameTemplate(savedDefault.fileNameTemplate ?? ''); }} className="rounded-lg px-4 py-2 border text-xs">기본값 불러오기</button>}
+            {isDirty && <span className="text-xs text-amber-700 self-center">저장하지 않은 변경이 있습니다</span>}
+          </div>}
           <p className="text-xs text-slate-500 mb-2">
-            폴더 규칙에 이어, 그 폴더에 저장될 파일의 이름을 정합니다. 업체별로 나누지 않고
-            <strong> 공통 하나</strong>만 씁니다 — 나중에 자료를 한데 모았을 때 규칙이 섞이면
-            정렬조차 되지 않습니다.
+            공통 기본 파일 이름입니다. 위 시공종류별 설정에서 전용 파일 이름을 저장하면 해당 종류에는 전용 규칙이 적용됩니다.
           </p>
 
           <input
+            disabled={readOnly}
             value={fileNameTemplate}
             onChange={(event) => setFileNameTemplate(event.target.value)}
             placeholder="{폴더명}_{종류}{번호}"
@@ -2084,14 +2108,20 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({ role }) => {
         <div className="flex items-start justify-between gap-3 mb-1">
           <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
             <Mail className="w-4 h-4 text-blue-600" />
-            삭제 요청 수신 메일
+            삭제 요청·업로드 오류 수신 메일
           </h3>
           {helpButton('email')}
         </div>
         <p className="text-xs text-slate-500 mb-4">
           업체 관리자가 시공기사 삭제를 시도하면, 여기 등록된{' '}
-          <strong>전원에게</strong> 요청 메일이 발송됩니다.
+          <strong>전원에게</strong> 요청 메일을 보낼 수 있습니다. 자료 저장이 최종 실패한 경우에도 이 목록으로 주문번호·주문자·주소·시공일·실패 파일과 오류 내용을 자동 발송합니다.
         </p>
+        <p className="text-xs text-amber-700 mb-4">자동 오류 메일에는 Azure 환경변수 MAIL_SENDER(발신 사서함)와 앱의 Microsoft Graph Mail.Send 애플리케이션 권한 및 관리자 동의가 필요합니다. 수신자만 등록하면 메일 발송 설정이 완료되는 것은 아닙니다.</p>
+        {!readOnly && <div className="rounded-lg bg-slate-50 p-3 text-xs mb-4 space-y-2">
+          <p>현재 기록 저장소: {storageStatus ? storageStatus.backend === 'AZURE_TABLES' ? `Azure Table Storage (${storageStatus.account})` : '서버 로컬 JSON — Azure 연결 상태를 확인하세요.' : '확인되지 않음'}</p>
+          <p>메일 기본 설정: {storageStatus ? storageStatus.mailConfigured ? `입력됨 / 발신자 ${storageStatus.sender} (실제 발송 권한은 별도 확인 필요)` : '미완료 — 발신자, 수신자, Graph 인증 설정을 확인하세요.' : '확인되지 않음'}</p>
+          <button type="button" className="underline text-blue-700" onClick={() => void adminApi.storageStatus().then(setStorageStatus).catch(() => setStorageStatus(null))}>저장소·메일 설정 상태 새로고침</button>
+        </div>}
         {helpPanel('email')}
         {message('email')}
 

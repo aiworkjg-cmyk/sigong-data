@@ -1,7 +1,7 @@
 import type { TechnicianTitle } from './types';
 
 /**
- * Pastel palette for the three 직함.
+ * Pastel palette for the 직함.
  *
  * Titles have to be readable at a glance on a phone in daylight, so each one
  * gets its own hue rather than a shared grey chip. The tones are kept light and
@@ -18,6 +18,16 @@ export interface TitleStyle {
 }
 
 export const TITLE_STYLES: Record<TechnicianTitle, TitleStyle> = {
+  대표: {
+    chip: 'bg-rose-100 text-rose-800 border-rose-200',
+    accent: 'bg-rose-300',
+    selected: 'border-rose-400 bg-rose-50',
+  },
+  실장: {
+    chip: 'bg-amber-100 text-amber-800 border-amber-200',
+    accent: 'bg-amber-300',
+    selected: 'border-amber-400 bg-amber-50',
+  },
   팀장: {
     chip: 'bg-violet-100 text-violet-800 border-violet-200',
     accent: 'bg-violet-300',

@@ -14,7 +14,13 @@ export type StorageMode = 'LIVE' | 'TEST_MODE';
 /* 시공기사 명부                                                        */
 /* ------------------------------------------------------------------ */
 
-export const TECHNICIAN_TITLES = ['팀장', '사수', '부사수'] as const;
+/**
+ * 직함. 순서가 곧 명부의 정렬 순서입니다(위가 상위).
+ *
+ * 대표·실장을 뒤에 붙이지 않고 앞에 둔 이유: 명부는 이 순서 그대로 그려지고,
+ * 배차할 때 누구를 중심으로 짝을 지을지 위에서부터 훑기 때문입니다.
+ */
+export const TECHNICIAN_TITLES = ['대표', '실장', '팀장', '사수', '부사수'] as const;
 export type TechnicianTitle = (typeof TECHNICIAN_TITLES)[number];
 
 /** One person on the roster. Selected on the submission form, never typed. */
@@ -420,6 +426,8 @@ export interface ConstructionTypeConfig {
   folderRule: {
     root: string;
     segments: string[];
+    /** 비어 있으면 공통 파일 이름 규칙을 사용합니다. */
+    fileNameTemplate?: string;
   };
 }
 
@@ -564,6 +572,14 @@ export interface WorkOrder {
   source: WorkOrderSource;
   /** 원본에서의 고유 식별자. 같은 값이 다시 들어오면 새로 만들지 않고 갱신합니다. */
   sourceKey: string;
+  /**
+   * 이 건을 가져온 구글시트 연동의 ID.
+   *
+   * 한 업체가 시트를 여러 개 쓸 수 있습니다(백조1·백조2). 동기화는 "시트에서
+   * 사라진 건"을 지우는데, 이 표시가 없으면 백조1 동기화가 백조2에서 온 건을
+   * 전부 지웁니다 — 시트마다 자기가 가져온 것만 책임지게 하는 값입니다.
+   */
+  sourceLinkId?: string;
   /** 사람이 화면에서 고친 항목. 시트 재동기화가 덮어쓰지 않습니다. */
   editedFields: string[];
   createdAt: string;
@@ -677,6 +693,13 @@ export interface GoogleAccountView {
    * 시트를 이 주소로 공유하는 것뿐입니다.
    */
   serviceAccountEmail: string;
+  /**
+   * 그 키가 어디서 왔는지.
+   *
+   * 'env' 는 서버 환경변수라 화면에서 손댈 수 없고, 'stored' 는 이 화면에서
+   * 등록한 것이라 해제할 수 있습니다. 빈 값이면 아직 등록되지 않았습니다.
+   */
+  serviceAccountSource: 'env' | 'stored' | '';
 }
 
 /** 시트 동기화 한 번의 결과. 무엇을 받아왔고 무엇을 뺐는지 남깁니다. */

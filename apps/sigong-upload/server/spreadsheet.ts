@@ -19,6 +19,7 @@ export interface SheetTable {
   headers: string[];
   /** Remaining rows, aligned to headers by position. */
   rows: string[][];
+  rowNumbers?: number[];
   /** Non-fatal observations worth showing the person importing the file. */
   warnings: string[];
 }
@@ -80,7 +81,13 @@ function unzip(buffer: Buffer): Map<string, Buffer> {
 
     if (!name.endsWith('/')) {
       try {
-        entries.set(name, method === 0 ? Buffer.from(body) : zlib.inflateRawSync(body));
+        const inflated = method === 0 ? Buffer.from(body) : zlib.inflateRawSync(body, { maxOutputLength: MAX_INFLATED_BYTES });
+        if (inflated.length !== uncompressedSize) throw new Error('엑셀 ZIP 크기 불일치');
+        // Excel writers may use an explicit namespace prefix (<x:row>) or
+        // the default namespace (<row>). Attribute prefixes such as r:id stay.
+        entries.set(name, /\.(xml|rels)$/.test(name)
+          ? Buffer.from(inflated.toString('utf8').replace(/(<\/?)[A-Za-z_][\w.-]*:/g, '$1'), 'utf8')
+          : inflated);
       } catch {
         // One unreadable part must not lose the rest; the caller reports the
         // absence of the part it actually needed.
@@ -230,7 +237,9 @@ function readSheet(xml: string, shared: string[], dateIndexes: Set<number>): str
       while (cells.length < at) cells.push('');
       cells[at] = value.trim();
     }
-    grid.push(cells);
+    const rowNumber = Number(attribute(rowXml.split('>')[0], 'r')) || grid.length + 1;
+    if (rowNumber > 1048576) throw new Error('엑셀 행 번호가 범위를 초과했습니다.');
+    grid[rowNumber - 1] = cells;
   }
   return grid;
 }
@@ -275,6 +284,8 @@ function findHeaderRow(rows: string[][]): number {
 
 /** Trims blank rows, finds the header row, and squares the rectangle. */
 export function toTable(grid: string[][], warnings: string[] = []): SheetTable {
+  const rowNumbers: number[] = [];
+  grid.forEach((row, index) => { if (row.some((cell) => cell !== '')) rowNumbers.push(index + 1); });
   const rows = grid.filter((row) => row.some((cell) => cell !== ''));
   if (rows.length === 0) return { headers: [], rows: [], warnings: [...warnings, '내용이 없는 파일입니다.'] };
 
@@ -306,7 +317,7 @@ export function toTable(grid: string[][], warnings: string[] = []): SheetTable {
       `같은 이름의 열이 있어 뒤쪽에 번호를 붙였습니다: ${duplicated.join(', ')}`
     );
   }
-  return { headers, rows: squared.slice(headerIndex + 1), warnings };
+  return { headers, rows: squared.slice(headerIndex + 1), rowNumbers: rowNumbers.slice(headerIndex + 1), warnings };
 }
 
 export interface WorkbookSheet {

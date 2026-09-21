@@ -127,6 +127,15 @@ export interface WorkbookOptions<T> {
   rows: T[];
   /** 표 위에 한 줄로 들어가는 설명. 어떤 조건으로 뽑았는지 남기는 용도입니다. */
   caption?: string;
+  /**
+   * 값을 고르게 할 열. 엑셀에서 목록 상자로 나옵니다.
+   *
+   * 직함처럼 정해진 값을 손으로 치게 두면 "팀장", "팀 장", "팀장님" 이 섞여
+   * 들어오고, 그 셋이 서로 다른 직함이 됩니다. 고르게 하면 그 일이 없습니다.
+   */
+  choices?: Array<{ header: string; options: string[] }>;
+  /** 빈 양식이어도 목록 상자를 걸어 둘 줄 수. 기본 200줄. */
+  choiceRows?: number;
 }
 
 /**
@@ -168,6 +177,39 @@ export function buildWorkbook<T>(options: WorkbookOptions<T>): Buffer {
   const lastColumn = columnName(Math.max(columns.length - 1, 0));
   const lastRow = headerRow + rows.length;
 
+  /*
+   * 목록 상자.
+   *
+   * 고를 값을 수식 안에 그대로 적습니다("대표,실장,팀장"). 별도 시트에 값을
+   * 두고 참조하는 방법이 더 정석이지만, 시트가 하나 더 생기면 양식을 받는
+   * 사람이 그 시트를 지우거나 고쳐서 목록이 깨집니다. 값이 몇 개뿐이라
+   * 수식에 넣는 편이 튼튼합니다(엑셀 한계는 255자).
+   *
+   * 빈 양식에도 걸어 두려면 아직 없는 줄까지 범위를 잡아야 합니다.
+   */
+  const validationLastRow = headerRow + Math.max(rows.length, options.choiceRows ?? 200);
+  const validations = (options.choices ?? [])
+    .map((choice) => {
+      const index = columns.findIndex((column) => column.header === choice.header);
+      if (index < 0 || choice.options.length === 0) return '';
+      const at = columnName(index);
+      const list = escapeXml(choice.options.join(','));
+      return (
+        `<dataValidation type="list" allowBlank="1" showInputMessage="1" showErrorMessage="1"` +
+        ` errorTitle="${escapeXml(choice.header)}" error="${escapeXml(
+          `목록에서 골라 주세요: ${choice.options.join(' / ')}`
+        )}"` +
+        ` sqref="${at}${headerRow + 1}:${at}${validationLastRow}">` +
+        `<formula1>"${list}"</formula1></dataValidation>`
+      );
+    })
+    .filter(Boolean);
+
+  const validationXml =
+    validations.length > 0
+      ? `<dataValidations count="${validations.length}">${validations.join('')}</dataValidations>`
+      : '';
+
   const sheet =
     '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
     '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
@@ -191,6 +233,7 @@ export function buildWorkbook<T>(options: WorkbookOptions<T>): Buffer {
     `<sheetData>${body.join('')}</sheetData>` +
     // 자동 필터를 걸어 두면 받는 사람이 바로 정렬·필터할 수 있습니다.
     (rows.length > 0 ? `<autoFilter ref="A${headerRow}:${lastColumn}${lastRow}"/>` : '') +
+    validationXml +
     '</worksheet>';
 
   const styles =

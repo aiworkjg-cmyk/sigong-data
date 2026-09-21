@@ -11,9 +11,10 @@
     "build:server": "esbuild server/index.ts --bundle --platform=node --target=node20 --format=cjs --sourcemap --outfile=dist/server.cjs --external:express --external:multer --external:dotenv --external:@azure/data-tables --external:@azure/identity --external:vite",
     "start": "node dist/server.cjs",
     "lint": "tsc --noEmit",
-    "test": "tsx --test server/graph-storage-target.test.ts server/manual-upload-reconciler.test.ts server/settings.test.ts server/order-import.test.ts server/work-orders.test.ts",
+    "test": "tsx --test server/graph-storage-target.test.ts server/manual-upload-reconciler.test.ts server/settings.test.ts server/order-import.test.ts server/work-orders.test.ts server/technician-import.test.ts server/upload-settings.test.ts",
     "hash-password": "tsx scripts/hash-password.ts",
-    "package:azure": "npm run build && node scripts/package-for-azure.mjs"
+    "package:azure": "npm run build && node scripts/package-for-azure.mjs",
+    "build:technician-template": "node scripts/build-technician-template.mjs"
   },
   "dependencies": {
     "@azure/data-tables": "^13.3.0",

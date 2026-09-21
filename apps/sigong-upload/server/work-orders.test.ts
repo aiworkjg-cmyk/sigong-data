@@ -22,6 +22,10 @@ class MemoryWorkOrders {
     if (index >= 0) this.items[index] = order; else this.items.push(order);
   }
   async remove(id: string) { this.items = this.items.filter((order) => order.id !== id); }
+  async removeMany(ids: string[]) {
+    const doomed = new Set(ids);
+    this.items = this.items.filter((order) => !doomed.has(order.id));
+  }
 }
 
 function serviceWith(): { service: WorkOrderService; store: MemoryWorkOrders } {
@@ -191,4 +195,57 @@ test('주문서의 현장종류와 담당 기사를 그대로 보관한다', asy
   // 현장종류는 시트 이름에서, 기사는 "26.05.25 / 유동현 팀장" 칸에서 옵니다.
   assert.equal(store.items[0]?.siteType, '롯데백화점(흥주부)');
   assert.equal(store.items[0]?.technicianName, '유동현 팀장');
+});
+
+test('같은 업체에 시트가 둘이면 한쪽 동기화가 다른 쪽 주문을 지우지 않는다', async () => {
+  const { service, store } = serviceWith();
+
+  const first = await service.importDrafts({
+    drafts: [draft({ orderNumber: 'B1-1' })],
+    source: 'GOOGLE_SHEET', createdBy: 'sheet:백조1', knownTypes: TYPES,
+    sourceLinkId: 'sheet-1',
+  });
+  await service.importDrafts({
+    drafts: [draft({ orderNumber: 'B2-1', address: '서울특별시 강남구 역삼동 12-3' })],
+    source: 'GOOGLE_SHEET', createdBy: 'sheet:백조2', knownTypes: TYPES,
+    sourceLinkId: 'sheet-2',
+  });
+  assert.equal(store.items.length, 2);
+
+  // 백조1 만 돌아간 회차. 백조2 의 건은 이 시트에 없는 것이 정상입니다.
+  const removed = await service.removeMissing({
+    constructionType: '백조', source: 'GOOGLE_SHEET', keys: first.keys ?? [], linkId: 'sheet-1',
+  });
+
+  assert.equal(removed, 0);
+  assert.equal(store.items.length, 2);
+  assert.deepEqual(
+    store.items.map((order) => order.sourceLinkId).sort(),
+    ['sheet-1', 'sheet-2']
+  );
+});
+
+test('시트가 하나뿐이면 시트에서 사라진 건을 지운다', async () => {
+  const { service, store } = serviceWith();
+
+  await service.importDrafts({
+    drafts: [draft({ orderNumber: 'B1-1' }), draft({ orderNumber: 'B1-2', rowKey: 'row-3' })],
+    source: 'GOOGLE_SHEET', createdBy: 'sheet:백조1', knownTypes: TYPES,
+    sourceLinkId: 'sheet-1',
+  });
+
+  // 둘째 줄이 시트에서 지워진 회차 — linkId 를 넘기지 않으면 예전 데이터까지
+  // 포함해 그 업체의 시트 출처 전체가 대상입니다.
+  const again = await service.importDrafts({
+    drafts: [draft({ orderNumber: 'B1-1' })],
+    source: 'GOOGLE_SHEET', createdBy: 'sheet:백조1', knownTypes: TYPES,
+    sourceLinkId: 'sheet-1',
+  });
+  const removed = await service.removeMissing({
+    constructionType: '백조', source: 'GOOGLE_SHEET', keys: again.keys ?? [],
+  });
+
+  assert.equal(removed, 1);
+  assert.equal(store.items.length, 1);
+  assert.equal(store.items[0]?.orderNumber, 'B1-1');
 });

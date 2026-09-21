@@ -3,6 +3,7 @@ import { Router } from 'express';
 import type { Request } from 'express';
 import multer from 'multer';
 import { config } from '../config';
+import { mailer } from '../mailer';
 import { formatTechnicians } from '../../src/types';
 import type { AppContext } from '../context';
 import { stagingDirFor, storedNameFor } from '../submission';
@@ -227,6 +228,7 @@ export function createPublicRouter(ctx: AppContext): Router {
         if (!err) return next();
 
         void removeQuietly(stagingDirFor((req as SubmissionRequest).siteId!));
+        void notifyRejectedUpload(ctx, req as SubmissionRequest, err.message || '파일 수신 실패');
 
         if (err instanceof multer.MulterError) {
           const messages: Record<string, string> = {
@@ -259,6 +261,7 @@ export function createPublicRouter(ctx: AppContext): Router {
         .resolveTechnicians(readIds(req.body?.technicianIds))
         .map((tech) => ({ id: tech.id, name: tech.name, title: tech.title }));
       const reject = async (message: string) => {
+        void notifyRejectedUpload(ctx, req, message);
         await removeQuietly(stagingDirFor(siteId));
         res.status(400).json({ error: '필수 입력 누락', message });
       };
@@ -384,6 +387,7 @@ export function createPublicRouter(ctx: AppContext): Router {
         });
       } catch (err: any) {
         console.error('[submit] 현장자료 접수 실패', err);
+        void notifyRejectedUpload(ctx, req, err?.message || '현장자료 접수 실패');
         await removeQuietly(stagingDirFor(siteId));
         res.status(500).json({
           error: '현장자료 접수 실패',
@@ -394,4 +398,21 @@ export function createPublicRouter(ctx: AppContext): Router {
   );
 
   return router;
+}
+
+async function notifyRejectedUpload(ctx: AppContext, req: SubmissionRequest, error: string): Promise<void> {
+  try {
+    const workOrderId = cleanText(req.body?.workOrderId, 120);
+    const order = workOrderId ? await ctx.repos.workOrders.get(workOrderId) : null;
+    await mailer.notifyQuietly({
+      id: req.siteId || '접수 전', constructionType: order?.constructionType || cleanText(req.body?.constructionType, 40),
+      workOrderId, customerName: order?.customerName || cleanText(req.body?.customerName, 80),
+      address: order?.address || cleanText(req.body?.address, 300),
+      managerName: order?.technicianName || '접수 전 — 기사 정보 확인 필요',
+      constructionDate: order?.scheduledDate || cleanText(req.body?.constructionDate, 10),
+      createdAt: new Date().toISOString(), status: 'FAILED', folderPath: '저장 전', files: [],
+      notes: cleanText(req.body?.notes, 500), retryAvailable: false,
+      syncMessage: `파일 접수 실패: ${error}. 브라우저에 전달된 정보까지만 표시됩니다. 다시 제출해 주세요.`,
+    }, [error], ctx.settings.deleteRequestEmails(), order);
+  } catch (err) { console.error('[mail] 접수 실패 알림 처리 오류', err); }
 }

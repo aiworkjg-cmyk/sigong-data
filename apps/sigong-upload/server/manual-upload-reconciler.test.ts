@@ -33,6 +33,15 @@ function makeService(items: DriveItem[], existing: DriveItem[], rename: (id: str
   return service;
 }
 
+test('시공종류 전용 파일 이름을 수동 업로드로 오인하여 다시 이름 바꾸지 않는다', async () => {
+ const item: DriveItem = {id:'custom',name:'백조_이미지_001.jpg',createdDateTime:'2026-09-10T00:00:00Z',parentReference:{path:parentPath},file:{mimeType:'image/jpeg'}};
+ const renamed: string[] = [];
+ const service = makeService([item],[],(_id,name) => renamed.push(name));
+ service.rulesForManualUploads = () => [{...DEFAULT_RULE,fileNameTemplate:'백조_{종류}_{번호}'}];
+ await service.reconcileManualUploads('cursor',new Date('2026-09-01'));
+ assert.deepEqual(renamed,[]);
+});
+
 test('수동 이미지와 동영상을 기존 순번 다음으로 이름 변경한다', async () => {
   const managed: DriveItem = {
     id: 'managed',

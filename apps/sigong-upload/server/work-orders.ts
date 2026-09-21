@@ -151,6 +151,8 @@ export class WorkOrderService {
     knownTypes: string[];
     /** Sheet sync passes false so hand corrections survive the next poll. */
     overwriteEdited?: boolean;
+    /** 시트 연동에서 온 경우 그 연동의 ID. removeMissing 의 범위가 됩니다. */
+    sourceLinkId?: string;
   }): Promise<WorkOrderImportResult> {
     if (input.drafts.length > MAX_IMPORT_ROWS) {
       throw new WorkOrderError(`한 번에 등록할 수 있는 주문은 ${MAX_IMPORT_ROWS}건까지입니다.`);
@@ -196,6 +198,9 @@ export class WorkOrderService {
 
           const next: WorkOrder = {
             ...existing,
+            // 소유권은 먼저 가져온 시트에 둡니다. 두 시트에 같은 건이 있어도
+            // 주인이 매번 바뀌면 두 연동이 10분마다 서로 갱신했다고 보고합니다.
+            sourceLinkId: existing.sourceLinkId || input.sourceLinkId,
             constructionType: keep('constructionType', prepared.constructionType),
             siteType: keep('siteType', prepared.siteType || existing.siteType),
             technicianName: keep('technicianName', prepared.technicianName || existing.technicianName),
@@ -219,7 +224,10 @@ export class WorkOrderService {
           // 시트 동기화가 매번 "갱신 14건"을 보고했고, 기록 목록이 똑같은 줄로
           // 가득 차 정작 무언가 바뀐 회차를 찾을 수 없었습니다. updatedAt 은
           // 비교에서 빼야 합니다 — 그것만 매번 달라지기 때문입니다.
-          if (sameOrder(existing, next)) {
+          // sourceLinkId 는 sameOrder 의 비교 항목이 아닙니다 — 주문 내용이
+          // 아니기 때문입니다. 하지만 이전 버전에서 만들어져 비어 있는 건은
+          // 여기서 주인을 채워 두어야 다음 동기화의 삭제 범위에 들어옵니다.
+          if (sameOrder(existing, next) && next.sourceLinkId === existing.sourceLinkId) {
             result.unchanged += 1;
             continue;
           }
@@ -249,6 +257,7 @@ export class WorkOrderService {
           status: 'OPEN',
           source: input.source,
           sourceKey,
+          sourceLinkId: input.sourceLinkId,
           editedFields: [],
           createdAt: now,
           createdBy: input.createdBy,
@@ -284,6 +293,15 @@ export class WorkOrderService {
     constructionType: string;
     source: WorkOrderSource;
     keys: string[];
+    /**
+     * 이 연동이 가져온 건만 대상으로 합니다.
+     *
+     * 한 업체에 시트가 여러 개일 때 필요합니다 — 백조1 동기화가 백조2에서 온
+     * 건까지 지우면, 두 목록이 주기마다 번갈아 사라집니다. 비워 두면 그
+     * 시공종류의 같은 출처 전체가 대상입니다(시트가 하나뿐일 때 쓰는 값으로,
+     * 예전 데이터나 해제된 연동이 남긴 건도 이때 함께 정리됩니다).
+     */
+    linkId?: string;
   }): Promise<number> {
     const keep = new Set(options.keys);
     const { items } = await this.repos.workOrders.list({
@@ -298,6 +316,7 @@ export class WorkOrderService {
         (order) =>
           order.source === options.source &&
           order.status !== 'SUBMITTED' &&
+          (!options.linkId || order.sourceLinkId === options.linkId) &&
           !keep.has(order.sourceKey)
       )
       .map((order) => order.id);

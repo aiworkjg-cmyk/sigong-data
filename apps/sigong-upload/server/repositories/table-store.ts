@@ -1,6 +1,7 @@
 import { TableClient, TableServiceClient, odata } from '@azure/data-tables';
 import { DefaultAzureCredential } from '@azure/identity';
 import { config } from '../config';
+import { encodeSettingsValue, decodeSettingsValue } from './settings-value';
 import { matchesSiteFilter } from './json-store';
 import { TERMINAL_STATUSES } from '../../src/types';
 import type { Issue, Paged, SiteRecord, UploadLog, WorkOrder } from '../../src/types';
@@ -509,7 +510,7 @@ class TableSettingsRepository implements SettingsRepository {
   async get(key: string): Promise<string | null> {
     try {
       const entity: any = await this.client.getEntity(SETTINGS_PARTITION, key);
-      return typeof entity.value === 'string' ? entity.value : null;
+      return decodeSettingsValue(entity);
     } catch (err: any) {
       if (err?.statusCode === 404) return null;
       throw err;
@@ -521,7 +522,7 @@ class TableSettingsRepository implements SettingsRepository {
       {
         partitionKey: SETTINGS_PARTITION,
         rowKey: key,
-        value,
+        ...encodeSettingsValue(value),
         updatedAt: new Date().toISOString(),
       },
       'Replace'

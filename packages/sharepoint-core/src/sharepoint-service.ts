@@ -422,6 +422,7 @@ export class SharePointService {
     files: PendingUpload[]
   ): Promise<SyncResult> {
     const startedAt = Date.now();
+    const rule = this.ruleForConstructionType?.(submission.constructionType) ?? this.rule;
     let folders = this.planFolders(submission);
 
     try {
@@ -465,7 +466,7 @@ export class SharePointService {
       const sequence = nextSequences(
         await this.existingNames(folders.attachmentsFolderPath),
         folderLeaf,
-        this.rule.fileNameTemplate
+        rule.fileNameTemplate
       );
 
       for (const file of files) {
@@ -481,9 +482,8 @@ export class SharePointService {
           file.fileType,
           sequence[kind],
           file.fileName,
-          // 파일 이름 규칙은 공통 하나뿐입니다 — 업체별로 갈라 두면 나중에
-          // 자료를 한데 모았을 때 정렬조차 되지 않습니다.
-          this.rule.fileNameTemplate,
+          // 시공종류 전용 규칙이 없으면 공통 파일 이름을 사용합니다.
+          rule.fileNameTemplate,
           folders.tokens
         );
         const remotePath = `${folders.attachmentsFolderPath}/${storedName}`;
@@ -621,7 +621,7 @@ export class SharePointService {
   private manualRules(): FolderRule[] {
     const supplied = this.rulesForManualUploads?.() ?? [];
     const seen = new Set<string>();
-    return [this.rule, ...supplied]
+    return [...supplied, this.rule]
       .filter((rule) => {
         const key = JSON.stringify({
           root: rule.root,
@@ -693,9 +693,10 @@ export class SharePointService {
       const current = await this.client.getItem(changed.id);
       if (!current || current.deleted || current.folder || !current.name) continue;
 
-      const eligible = rules
+      const matches = rules
         .map((rule) => this.eligibleManualFolder(current.parentReference?.path || '', rule))
-        .find((match) => match !== null);
+        .filter((match) => match !== null);
+      const eligible = matches[0];
       if (!eligible) continue;
 
       // A historical file edited after deployment is not a new manual upload.
@@ -710,7 +711,7 @@ export class SharePointService {
         : null;
       if (
         (metadataName && current.name.toLowerCase() === metadataName.toLowerCase()) ||
-        followsManagedName(eligible.folderLeaf, current.name, eligible.rule.fileNameTemplate)
+        matches.some((match) => followsManagedName(match.folderLeaf, current.name!, match.rule.fileNameTemplate))
       ) {
         result.skipped += 1;
         continue;

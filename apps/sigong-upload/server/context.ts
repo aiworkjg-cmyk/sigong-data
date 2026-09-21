@@ -1,4 +1,4 @@
-import { SharePointService, loadFolderRuleFromEnv } from '@jg/sharepoint-core';
+import { SharePointService, loadFolderRuleFromEnv, sanitizeSegment } from '@jg/sharepoint-core';
 import { AdminDirectory } from './admin-directory';
 import { config, ensureDataDirs, validateConfig } from './config';
 import { mailer } from './mailer';
@@ -79,9 +79,11 @@ export async function createContext(): Promise<AppContext> {
   sharePoint.ruleForConstructionType = (constructionType) =>
     settings.effectiveFolderRule(constructionType);
   sharePoint.rulesForManualUploads = () =>
-    settings.constructionTypes().map((constructionType) =>
-      settings.effectiveFolderRule(constructionType)
-    );
+    settings.constructionTypes().map((constructionType) => {
+      const rule = settings.effectiveFolderRule(constructionType);
+      return { ...rule, segments: rule.segments.map((segment) =>
+        segment.replace(/\{(?:시공종류|type|constructionType)\}/g, sanitizeSegment(constructionType))) };
+    });
 
   const worker = new SubmissionWorker(repos, sharePoint, settings);
   const manualUploads = new ManualUploadReconciler(sharePoint, repos.settings, () =>
@@ -99,9 +101,9 @@ export async function createContext(): Promise<AppContext> {
     warnings.push('시공종류가 하나도 없습니다. 관리자 화면 > 설정에서 추가해야 자료 제출이 가능합니다.');
   }
 
-  if (!mailer.isConfigured()) {
+  if (!mailer.isConfigured(settings.deleteRequestEmails())) {
     warnings.push(
-      '실패 알림 메일이 비활성 상태입니다. (MAIL_SENDER / ADMIN_ALERT_EMAIL / SHAREPOINT_* 설정 필요)'
+      '실패 알림 메일 기본 설정이 미완료입니다. MAIL_SENDER, 사이트 설정의 수신자, SHAREPOINT_* 인증 정보를 확인하세요.'
     );
   }
   warnings.forEach((warning) => console.warn(`[config] ${warning}`));

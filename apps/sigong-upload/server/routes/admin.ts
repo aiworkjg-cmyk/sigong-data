@@ -1,4 +1,7 @@
 import { Router } from 'express';
+import multer from 'multer';
+import { parseXlsx, parseCsv } from '../spreadsheet';
+import { validateTechnicianImport } from '../technician-import';
 import { SUBMISSION_FIELDS } from '../../src/submission-layout';
 import type { Response } from 'express';
 import { DelegatedAuthError, GraphApiError, GraphClient } from '@jg/sharepoint-core';
@@ -177,12 +180,17 @@ export function createAdminRouter(ctx: AppContext): Router {
       recordBackend: ctx.repos.backend,
       constructionTypes: ctx.settings.constructionTypes(),
       mail: {
-        configured: mailer.isConfigured(),
+        configured: mailer.isConfigured(ctx.settings.deleteRequestEmails()),
         sender: config.mail.sender,
-        recipients: config.mail.alertRecipients,
+        recipients: ctx.settings.deleteRequestEmails(),
       },
       warnings: ctx.warnings,
     });
+  });
+
+  router.get('/settings/storage-status', requireMaster, (_req, res) => {
+    res.json({ backend: ctx.repos.backend, account: config.tables.accountName,
+      mailConfigured: mailer.isConfigured(ctx.settings.deleteRequestEmails()), sender: config.mail.sender });
   });
 
   router.get('/folders', requireMaster, async (req, res) => {
@@ -632,6 +640,32 @@ export function createAdminRouter(ctx: AppContext): Router {
     } catch (err) {
       handleSettingsError(err, res);
     }
+  });
+
+  const technicianUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 2 * 1024 * 1024, files: 1, fields: 1 } });
+  router.post('/technicians/import', requireManager, (req, res) => {
+    technicianUpload.single('file')(req, res, async (uploadError) => {
+      try {
+        if (uploadError) throw new SettingsError('파일을 읽지 못했습니다. 2MB 이하의 엑셀(.xlsx) 또는 CSV 파일 1개를 선택해 주세요.');
+        if (!req.file) throw new SettingsError('업로드할 파일을 선택해 주세요.');
+        const file = req.file;
+        if (!/\.(xlsx|csv)$/i.test(file.originalname)) throw new SettingsError('.xlsx 또는 UTF-8 CSV 파일만 가능합니다.');
+        const table = /\.xlsx$/i.test(file.originalname) ? parseXlsx(file.buffer) : parseCsv(file.buffer.toString('utf8'));
+        const admin = req.admin!;
+        const allowed = scopeOf(admin).all ? ctx.settings.constructionTypes() : admin.constructionTypes;
+        const result = validateTechnicianImport(table, ctx.settings.technicians(), allowed);
+        if (req.body?.confirm !== 'true') {
+          res.json({ ...result, count: result.rows.length });
+          return;
+        }
+        if (result.errors.length) throw new SettingsError(result.errors.join('\n'));
+        const count = await ctx.settings.importTechnicians(table, allowed, admin.username);
+        res.status(201).json({ count, technicians: rosterFor(admin) });
+      } catch (error) {
+        if (error instanceof SettingsError) handleSettingsError(error, res);
+        else res.status(400).json({ message: '엑셀 파일을 읽지 못했습니다. 제공된 양식으로 다시 저장해 주세요.' });
+      }
+    });
   });
 
   router.patch('/technicians/:id', requireManager, async (req, res) => {

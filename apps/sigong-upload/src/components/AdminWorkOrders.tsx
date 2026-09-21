@@ -108,6 +108,10 @@ export const AdminWorkOrders: React.FC<AdminWorkOrdersProps> = ({ session, const
   /** 입력창은 기본으로 닫혀 있습니다 — 추가는 가끔 하는 일입니다. */
   const [sheetFormOpen, setSheetFormOpen] = useState(false);
   const [google, setGoogle] = useState<GoogleAccountView | null>(null);
+  /** 붙여넣는 서비스 계정 키. 저장하면 비웁니다 — 화면에 남겨 둘 값이 아닙니다. */
+  const [serviceKey, setServiceKey] = useState('');
+  /** 키 발급 절차 안내. 처음 한 번만 필요하므로 기본은 접어 둡니다. */
+  const [keyGuideOpen, setKeyGuideOpen] = useState(false);
   /** 최근 동기화 기록 — 무엇을 받았고 무엇을 뺐는지. */
   const [reports, setReports] = useState<SheetSyncReport[]>([]);
   const [openReport, setOpenReport] = useState<string | null>(null);
@@ -365,6 +369,43 @@ export const AdminWorkOrders: React.FC<AdminWorkOrdersProps> = ({ session, const
     }
   };
 
+  const saveServiceAccount = async () => {
+    setBusy('service-account');
+    setFeedback(null);
+    try {
+      const view = await adminApi.saveGoogleServiceAccount(serviceKey);
+      setGoogle(view);
+      setServiceKey('');
+      ok(
+        `서비스 계정을 등록했습니다. 이제 ${view.serviceAccountEmail} 를 각 구글시트의 [공유]에 ` +
+          '뷰어로 추가하면 읽습니다. 다시 로그인할 일은 없습니다.'
+      );
+    } catch (err: any) {
+      fail(err?.message || '서비스 계정 키를 등록하지 못했습니다.');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const clearServiceAccount = async () => {
+    if (!window.confirm('등록된 서비스 계정 키를 지울까요? 공유로만 열리는 시트 외에는 읽지 못하게 됩니다.')) return;
+    try {
+      setGoogle(await adminApi.clearGoogleServiceAccount());
+      ok('서비스 계정 키를 지웠습니다.');
+    } catch (err: any) {
+      fail(err?.message || '서비스 계정 키를 지우지 못했습니다.');
+    }
+  };
+
+  const copyServiceAccountEmail = () => {
+    const address = google?.serviceAccountEmail;
+    if (!address) return;
+    navigator.clipboard
+      .writeText(address)
+      .then(() => ok('서비스 계정 주소를 복사했습니다. 구글시트 [공유]에 붙여넣어 주세요.'))
+      .catch(() => fail('클립보드 복사가 차단되었습니다. 주소를 직접 선택해 복사해 주세요.'));
+  };
+
   const saveSheet = async () => {
     setBusy('sheet-save');
     try {
@@ -488,7 +529,9 @@ export const AdminWorkOrders: React.FC<AdminWorkOrdersProps> = ({ session, const
           </h3>
           <p className="text-xs text-slate-500 mb-4">
             정한 주기마다 시트를 읽어 새 주문을 등록합니다. 화면에서 직접 고친 항목은 시트가
-            덮어쓰지 않습니다.
+            덮어쓰지 않습니다. <strong>한 업체에 시트를 여러 개 연동해도 됩니다</strong> — 업체를
+            백조로 고르고 이름만 백조1 · 백조2 로 다르게 두면, 모든 시트의 주문이 한 목록에
+            모이고 각 시공일에 함께 조회됩니다.
           </p>
 
           {/* 계정을 연결하면 시트마다 공유 설정을 손댈 일이 없어집니다.
@@ -501,12 +544,15 @@ export const AdminWorkOrders: React.FC<AdminWorkOrdersProps> = ({ session, const
               <div>
                 <div className="flex items-center gap-2 mb-2">
                   <ShieldCheck className="w-5 h-5 text-emerald-600 shrink-0" />
-                  <p className="text-sm font-bold text-slate-900">서비스 계정 연결됨</p>
+                  <p className="text-sm font-bold text-slate-900">
+                    서비스 계정 연결됨{' '}
+                    <span className="font-semibold text-emerald-700">— 만료 없음</span>
+                  </p>
                 </div>
                 <p className="text-[11px] text-slate-600 mb-2">
                   아래 주소를 구글시트 <strong>[공유]</strong> 에 <strong>뷰어</strong>로 추가하면
                   그 시트를 읽습니다. 조직이 &quot;링크가 있는 모든 사용자&quot; 공유를 막아 두었어도
-                  이 방법은 됩니다.
+                  이 방법은 됩니다. 다시 로그인할 일은 없습니다.
                 </p>
                 <div className="flex flex-wrap items-center gap-2">
                   <code className="flex-1 min-w-[240px] px-2 py-1.5 rounded bg-white border border-slate-300 font-mono text-[11px] text-slate-700 break-all">
@@ -514,17 +560,29 @@ export const AdminWorkOrders: React.FC<AdminWorkOrdersProps> = ({ session, const
                   </code>
                   <button
                     type="button"
-                    onClick={() => {
-                      navigator.clipboard
-                        .writeText(google.serviceAccountEmail)
-                        .then(() => ok('서비스 계정 주소를 복사했습니다. 구글시트 [공유]에 붙여넣어 주세요.'))
-                        .catch(() => fail('클립보드 복사가 차단되었습니다. 주소를 직접 선택해 복사해 주세요.'));
-                    }}
+                    onClick={copyServiceAccountEmail}
                     className="px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white text-[11px] font-bold text-slate-700"
                   >
-                    복사
+                    주소 복사
                   </button>
+                  {/* 환경변수로 넣은 키는 배포로 정한 값입니다. 화면에서 지울 수
+                      있게 하면 서버 설정과 화면이 어긋납니다. */}
+                  {google.serviceAccountSource === 'stored' && (
+                    <button
+                      type="button"
+                      onClick={() => void clearServiceAccount()}
+                      className="px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white text-[11px] font-bold text-slate-500"
+                    >
+                      키 지우기
+                    </button>
+                  )}
                 </div>
+                {google.serviceAccountSource === 'env' && (
+                  <p className="mt-2 text-[11px] text-slate-500">
+                    서버 환경변수 <code>GOOGLE_SERVICE_ACCOUNT_JSON</code> 으로 설정된 키입니다.
+                    바꾸려면 서버 설정에서 바꿔 주세요.
+                  </p>
+                )}
               </div>
             ) : google?.account ? (
               <div className="flex flex-wrap items-center gap-3">
@@ -546,41 +604,124 @@ export const AdminWorkOrders: React.FC<AdminWorkOrdersProps> = ({ session, const
               </div>
             ) : (
               <>
-                <p className="text-sm font-bold text-slate-900 mb-1">Google 계정 연결 (권장)</p>
-                <p className="text-[11px] text-slate-600 mb-3">
-                  한 번 로그인해 두면 <strong>시트마다 공유 설정을 바꿀 필요가 없습니다.</strong>{' '}
-                  읽기 권한만 요청하며, 이 앱은 시트를 고칠 수 없습니다.
+                {/* 붙여넣는 칸을 화면에 두는 이유.
+                    이 키는 원래 서버 환경변수로만 넣을 수 있었고, 그 말은
+                    Azure 포털에 들어갈 수 있는 사람만 연동을 시작할 수 있다는
+                    뜻이었습니다. 실제로 시트를 연동하는 사람은 그 권한이 없는
+                    경우가 많습니다. 여기서 한 번 붙여넣으면 끝나게 합니다. */}
+                <p className="text-sm font-bold text-slate-900 mb-1">
+                  서비스 계정 키 등록 <span className="text-emerald-700">(권장 · 한 번만, 만료 없음)</span>
                 </p>
-                <p className="text-[11px] text-amber-700 mb-3">
-                  개인 Gmail 계정으로 만든 앱은 동의 화면을 <strong>[외부]</strong>로 둘 수밖에 없고,
-                  그 상태에서는 <strong>7일마다 다시 로그인</strong>해야 합니다. 그게 번거로우면
-                  서버에 <code>GOOGLE_SERVICE_ACCOUNT_JSON</code> 을 설정하는 쪽을 권합니다 —
-                  만료도 재로그인도 없습니다.
+                <p className="text-[11px] text-slate-600 mb-2">
+                  Google Cloud Console 에서 받은 <strong>JSON 키 파일</strong>의 내용을 그대로
+                  붙여넣으세요. 등록하면 <code>...@....iam.gserviceaccount.com</code> 주소가 나오고,
+                  그 주소를 각 구글시트 <strong>[공유]</strong> 에 <strong>뷰어</strong>로 추가하면
+                  됩니다. <strong>재로그인도, 7일 만료도 없습니다.</strong>
                 </p>
+
                 <button
                   type="button"
-                  onClick={() => void connectGoogle()}
-                  disabled={busy === 'google' || !google?.configured}
-                  className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold disabled:opacity-50"
+                  onClick={() => setKeyGuideOpen(!keyGuideOpen)}
+                  className="mb-2 text-[11px] font-bold text-blue-700 underline"
                 >
-                  {busy === 'google' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <LogIn className="w-3.5 h-3.5" />}
-                  Google 계정 연결
+                  {keyGuideOpen ? '키 발급 방법 접기' : '키를 어디서 받나요? (5단계)'}
                 </button>
-                {google && !google.configured && (
-                  <p className="mt-2 text-[11px] text-amber-700">
-                    서버에 <code>GOOGLE_CLIENT_ID</code> / <code>GOOGLE_CLIENT_SECRET</code> 이 없어
-                    로그인을 시작할 수 없습니다. 설정 전에는 시트를 <strong>[공유] &gt; 링크가 있는
-                    모든 사용자 &gt; 뷰어</strong> 로 바꾸거나 <strong>[웹에 게시]</strong> 해 주세요.
-                  </p>
+                {keyGuideOpen && (
+                  <ol className="mb-3 pl-4 list-decimal space-y-1 text-[11px] text-slate-600">
+                    <li>
+                      <a
+                        href="https://console.cloud.google.com/projectcreate"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-blue-700 underline"
+                      >
+                        console.cloud.google.com
+                      </a>{' '}
+                      에서 프로젝트를 하나 만듭니다 (이미 있으면 그대로 사용).
+                    </li>
+                    <li>
+                      [API 및 서비스] &gt; [라이브러리] 에서{' '}
+                      <strong>Google Sheets API</strong> 를 찾아 <strong>사용 설정</strong>합니다.
+                      (이 단계를 빠뜨리면 키는 만들어져도 시트를 읽지 못합니다.)
+                    </li>
+                    <li>
+                      [API 및 서비스] &gt; [사용자 인증 정보] &gt; [사용자 인증 정보 만들기] &gt;{' '}
+                      <strong>서비스 계정</strong>. 이름은 아무거나, 역할은 지정하지 않아도 됩니다.
+                    </li>
+                    <li>
+                      만든 서비스 계정을 눌러 [키] 탭 &gt; [키 추가] &gt; [새 키 만들기] &gt;{' '}
+                      <strong>JSON</strong> — 파일이 내려받아집니다.
+                    </li>
+                    <li>
+                      그 파일을 메모장으로 열어 <strong>전체 선택(Ctrl+A) · 복사</strong> 후 아래
+                      칸에 붙여넣고 [키 등록]을 누릅니다.
+                    </li>
+                  </ol>
                 )}
-                {google?.configured && (
-                  <p className="mt-2 text-[11px] text-slate-500 break-all">
-                    Google Cloud Console 의 승인된 리디렉션 URI:{' '}
-                    <code className="px-1 py-0.5 rounded bg-white border border-slate-300">
-                      {google.redirectUri}
-                    </code>
+
+                <textarea
+                  value={serviceKey}
+                  onChange={(event) => setServiceKey(event.target.value)}
+                  rows={4}
+                  spellCheck={false}
+                  placeholder={'{\n  "type": "service_account",\n  "project_id": "...",\n  "private_key": "-----BEGIN PRIVATE KEY-----\\n..."\n}'}
+                  className="w-full px-3 py-2 rounded-lg border border-slate-300 bg-white font-mono text-[11px] text-slate-700"
+                />
+                <button
+                  type="button"
+                  onClick={() => void saveServiceAccount()}
+                  disabled={busy === 'service-account' || !serviceKey.trim()}
+                  className="mt-2 inline-flex items-center gap-1.5 px-4 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold disabled:opacity-50"
+                >
+                  {busy === 'service-account' ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <ShieldCheck className="w-3.5 h-3.5" />
+                  )}
+                  키 등록
+                </button>
+                <p className="mt-1.5 text-[11px] text-slate-500">
+                  등록 전에 실제로 한 번 인증해 봅니다. 잘못된 키는 저장되지 않고 이유를 알려 줍니다.
+                  키는 서버에 암호화해 보관하며 화면에 다시 표시되지 않습니다.
+                </p>
+
+                {/* OAuth 는 남겨 둡니다 — 이미 이렇게 연결해 둔 곳이 있고,
+                    키 발급이 막힌 환경에서는 이쪽이 유일한 길입니다. */}
+                <div className="mt-3 pt-3 border-t border-slate-200">
+                  <p className="text-[11px] font-bold text-slate-700 mb-1">
+                    또는 Google 계정으로 로그인
                   </p>
-                )}
+                  <p className="text-[11px] text-amber-700 mb-2">
+                    개인 Gmail 계정으로 만든 앱은 동의 화면을 <strong>[외부]</strong>로 둘 수밖에 없고,
+                    그 상태에서는 <strong>7일마다 다시 로그인</strong>해야 합니다. 계속 쓸 연동이라면
+                    위의 서비스 계정 키를 쓰세요.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => void connectGoogle()}
+                    disabled={busy === 'google' || !google?.configured}
+                    className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-300 bg-white text-xs font-bold text-slate-700 disabled:opacity-50"
+                  >
+                    {busy === 'google' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <LogIn className="w-3.5 h-3.5" />}
+                    Google 계정 연결
+                  </button>
+                  {google && !google.configured && (
+                    <p className="mt-2 text-[11px] text-slate-500">
+                      서버에 <code>GOOGLE_CLIENT_ID</code> / <code>GOOGLE_CLIENT_SECRET</code> 이 없어
+                      이 방법은 지금 쓸 수 없습니다. 위의 서비스 계정 키를 등록하거나, 시트를{' '}
+                      <strong>[공유] &gt; 링크가 있는 모든 사용자 &gt; 뷰어</strong> 로 바꿔 주세요
+                      (이 경우 <strong>첫 탭만</strong> 읽힙니다).
+                    </p>
+                  )}
+                  {google?.configured && (
+                    <p className="mt-2 text-[11px] text-slate-500 break-all">
+                      Google Cloud Console 의 승인된 리디렉션 URI:{' '}
+                      <code className="px-1 py-0.5 rounded bg-white border border-slate-300">
+                        {google.redirectUri}
+                      </code>
+                    </p>
+                  )}
+                </div>
               </>
             )}
           </div>
@@ -939,9 +1080,12 @@ export const AdminWorkOrders: React.FC<AdminWorkOrdersProps> = ({ session, const
                 <input
                   value={sheetDraft.label}
                   onChange={(event) => setSheetDraft({ ...sheetDraft, label: event.target.value })}
-                  placeholder="예: 백조 9월 주문"
+                  placeholder="예: 백조1"
                   className="w-full px-3 py-2.5 rounded-lg border border-slate-300 text-sm"
                 />
+                <span className="block mt-1 text-[11px] text-slate-500">
+                  같은 업체의 시트를 여럿 등록할 때 구분하는 이름입니다.
+                </span>
               </label>
               <label>
                 <span className="block text-xs font-bold text-slate-700 mb-1.5">
@@ -966,6 +1110,31 @@ export const AdminWorkOrders: React.FC<AdminWorkOrdersProps> = ({ session, const
                   placeholder="https://docs.google.com/spreadsheets/d/.../edit#gid=0"
                   className="w-full px-3 py-2.5 rounded-lg border border-slate-300 font-mono text-xs"
                 />
+                {/* 시트 주소만 넣고 저장하면 대부분 권한에서 막힙니다. 그 사실을
+                    실패한 뒤가 아니라 입력하는 자리에서 알려 줍니다. */}
+                {google?.serviceAccountEmail ? (
+                  <span className="block mt-1.5 text-[11px] text-slate-600">
+                    저장하기 전에, 이 시트의 <strong>[공유]</strong> 에{' '}
+                    <code className="px-1 rounded bg-slate-100 border border-slate-200 break-all">
+                      {google.serviceAccountEmail}
+                    </code>{' '}
+                    를 <strong>뷰어</strong>로 추가해 주세요.{' '}
+                    <button
+                      type="button"
+                      onClick={copyServiceAccountEmail}
+                      className="font-bold text-blue-700 underline"
+                    >
+                      주소 복사
+                    </button>
+                  </span>
+                ) : (
+                  <span className="block mt-1.5 text-[11px] text-amber-700">
+                    아직 서비스 계정 키가 등록되지 않았습니다. 이 상태에서는 시트를{' '}
+                    <strong>[공유] &gt; 링크가 있는 모든 사용자 &gt; 뷰어</strong> 로 바꾼 경우에만,
+                    그것도 <strong>첫 탭만</strong> 읽을 수 있습니다. 위쪽에서 키를 먼저 등록하시는
+                    편이 낫습니다.
+                  </span>
+                )}
               </label>
               <label>
                 <span className="block text-xs font-bold text-slate-700 mb-1.5">
