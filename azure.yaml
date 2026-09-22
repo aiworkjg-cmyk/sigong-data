@@ -28,10 +28,14 @@ services:
 hooks:
   # 올리기 전에 빌드합니다. 빌드하지 않은 채 배포해 "왜 옛날 화면이 뜨지" 로
   # 시간을 쓰는 일을 구조적으로 막습니다.
+  # shell 은 sh 로 둡니다. pwsh(PowerShell 7)는 따로 설치해야 하는 프로그램이고,
+  # 없으면 이 훅이 실행되지 않은 채 배포가 "성공"합니다 — 옛 deploy 폴더가
+  # 그대로 올라가고, 사이트에는 바뀐 것이 없는데 로그에는 SUCCESS 가 찍힙니다.
+  # 한 번 겪었습니다. Git 이 설치된 Windows 에는 sh 가 항상 있습니다.
   prepackage:
     windows:
-      shell: pwsh
-      run: npm ci; npm run package:azure --workspace @jg/sigong-upload
+      shell: sh
+      run: npm ci && npm run package:azure --workspace @jg/sigong-upload
     posix:
       shell: sh
       run: npm ci && npm run package:azure --workspace @jg/sigong-upload
