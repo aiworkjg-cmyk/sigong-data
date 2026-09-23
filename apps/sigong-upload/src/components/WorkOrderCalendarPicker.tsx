@@ -11,7 +11,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import { publicApi } from '../api';
-import { maskAddress, maskName } from '../privacy';
+import { maskName } from '../privacy';
 import type { WorkOrder, WorkOrderGroup } from '../types';
 
 interface WorkOrderCalendarPickerProps {
@@ -50,8 +50,10 @@ function monthGrid(cursor: Date): Date[] {
  * 훑는 것보다 그 기억의 순서와 맞습니다. 대신 한 화면에 담기는 정보가 적어서
  * 건수가 많은 업체에는 목록 쪽이 낫습니다 — 그래서 둘을 두고 고르게 합니다.
  *
- * 날짜 칸에는 현장 이름만 적습니다. 주문자·연락처·동호수는 칸에 넣지 않습니다
- * (privacy.ts 참고) — 달력은 펼쳐 놓고 보는 화면이라 더 그렇습니다.
+ * 달력 칸(작은 미리보기)에는 현장 이름만 적습니다 — 펼쳐 놓고 보는 화면이라
+ * 그렇습니다. 날짜를 눌러 연 목록에서는 주문번호와 주소를 전체로 보여 줍니다.
+ * 동·호수까지 보여야 같은 아파트의 다른 동을 구분할 수 있고, 그것이 기사가 이
+ * 목록을 보는 이유입니다. 이름은 여전히 끝자를 가립니다(privacy.ts).
  */
 export const WorkOrderCalendarPicker: React.FC<WorkOrderCalendarPickerProps> = ({
   constructionType,
@@ -134,12 +136,18 @@ export const WorkOrderCalendarPicker: React.FC<WorkOrderCalendarPickerProps> = (
           <div className="flex-1 min-w-0">
             <p className="text-[11px] font-bold text-blue-700 mb-1">선택한 시공건</p>
             <p className="text-base font-extrabold text-slate-900 break-keep">
-              {selected.building || maskAddress(selected.address) || '(주소 미정)'}
+              {selected.orderNumber || selected.building || '(주문번호 없음)'}
             </p>
-            <p className="mt-1 text-xs text-slate-600">
+            <p className="text-base font-extrabold text-slate-900 break-keep">
+              {selected.address || '(주소 미정)'}
+            </p>
+            <p className="mt-1 text-xs text-slate-600 break-keep">
+              주문자명 : {maskName(selected.customerName) || '—'}
+              {selected.technicianName ? ` · 시공예정자 : ${selected.technicianName}` : ''}
+            </p>
+            <p className="mt-0.5 text-xs text-slate-500">
               {selected.scheduledDate || '날짜 미정'}
               {selected.siteType ? ` · ${selected.siteType}` : ''}
-              {selected.customerName ? ` · ${maskName(selected.customerName)}` : ''}
             </p>
           </div>
           <button
@@ -278,7 +286,7 @@ export const WorkOrderCalendarPicker: React.FC<WorkOrderCalendarPickerProps> = (
                         : 'bg-blue-100 text-blue-900'
                     }`}
                   >
-                    {order.building || maskAddress(order.address) || '현장'}
+                    {order.building || order.address || '현장'}
                   </span>
                 ))}
                 {list.length > 2 && (
@@ -316,23 +324,27 @@ export const WorkOrderCalendarPicker: React.FC<WorkOrderCalendarPickerProps> = (
                     key={order.id}
                     type="button"
                     onClick={() => onSelect(order)}
-                    className={`w-full flex items-center gap-2 px-3 py-2.5 text-left ${
+                    className={`w-full flex items-start gap-2 px-3 py-2.5 text-left ${
                       order.status === 'SUBMITTED'
                         ? 'bg-emerald-200 hover:bg-emerald-300 active:bg-emerald-400'
                         : 'hover:bg-blue-50 active:bg-blue-100'
                     }`}
                   >
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm font-bold text-slate-900 truncate">
-                        {order.building || maskAddress(order.address) || '(주소 미정)'}
+                      <p className="text-sm font-bold text-slate-900 break-keep">
+                        {order.orderNumber || order.building || '(주문번호 없음)'}
                         {order.status === 'SUBMITTED' && (
                           <span className="ml-1.5 px-1.5 py-0.5 rounded bg-emerald-600 text-[10px] font-bold text-white align-middle">
                             업로드 완료
                           </span>
                         )}
                       </p>
-                      <p className="text-[11px] text-slate-500 truncate">
-                        {maskAddress(order.address)}
+                      <p className="text-sm font-bold text-slate-900 break-keep">
+                        {order.address || '(주소 미정)'}
+                      </p>
+                      <p className="mt-0.5 text-[11px] text-slate-500 break-keep">
+                        주문자명 : {maskName(order.customerName) || '—'}
+                        {order.technicianName ? ` · 시공예정자 : ${order.technicianName}` : ''}
                       </p>
                     </div>
                     <ChevronRight className="w-4 h-4 text-slate-300 shrink-0" />
@@ -438,17 +450,20 @@ export const WorkOrderCalendarPicker: React.FC<WorkOrderCalendarPickerProps> = (
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-bold text-slate-900 break-keep">
                         <span className="mr-1.5 text-slate-400">{index + 1}.</span>
-                        {order.building || maskAddress(order.address) || '(주소 미정)'}
+                        {order.orderNumber || order.building || '(주문번호 없음)'}
                         {order.status === 'SUBMITTED' && (
                           <span className="ml-1.5 px-1.5 py-0.5 rounded bg-emerald-600 text-[10px] font-bold text-white align-middle">
                             업로드 완료
                           </span>
                         )}
                       </p>
+                      <p className="text-sm font-bold text-slate-900 break-keep">
+                        <MapPin className="inline w-3.5 h-3.5 mr-0.5 -mt-0.5 text-slate-400" />
+                        {order.address || '(주소 미정)'}
+                      </p>
                       <p className="mt-0.5 text-xs text-slate-500 break-keep">
-                        <MapPin className="inline w-3 h-3 mr-0.5 -mt-0.5" />
-                        {maskAddress(order.address)}
-                        {order.customerName ? ` · ${maskName(order.customerName)}` : ''}
+                        주문자명 : {maskName(order.customerName) || '—'}
+                        {order.technicianName ? ` · 시공예정자 : ${order.technicianName}` : ''}
                       </p>
                     </div>
                     <ChevronRight className="w-4 h-4 text-slate-300 shrink-0" />

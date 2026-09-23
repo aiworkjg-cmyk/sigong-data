@@ -10,7 +10,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import { publicApi } from '../api';
-import { maskAddress, maskName } from '../privacy';
+import { maskName } from '../privacy';
 import type { WorkOrder, WorkOrderGroup } from '../types';
 
 interface WorkOrderPickerProps {
@@ -127,22 +127,24 @@ export const WorkOrderPicker: React.FC<WorkOrderPickerProps> = ({
           <div className="flex-1 min-w-0">
             <p className="text-[11px] font-bold text-blue-700 mb-1">선택한 시공건</p>
             <p className="text-base font-extrabold text-slate-900 break-keep">
-              {selected.building || selected.address || '(주소 미정)'}
+              {selected.orderNumber || selected.building || '(주문번호 없음)'}
+            </p>
+            <p className="text-base font-extrabold text-slate-900 break-keep">
+              {selected.address || '(주소 미정)'}
             </p>
             <dl className="mt-2 space-y-1">
               {([
+                ['주문자명', maskName(selected.customerName)],
+                ['시공예정자', selected.technicianName || ''],
                 ['현장종류', selected.siteType || ''],
                 ['시공일', selected.scheduledDate ? formatDay(selected.scheduledDate) : '미정'],
-                // 동호수·연락처는 보여 주지 않고 이름은 끝자를 가립니다.
-                // 이유는 privacy.ts 에 적어 두었습니다.
-                ['주소', maskAddress(selected.address) || '미정'],
-                ['주문자', maskName(selected.customerName)],
-                ['주문번호', selected.orderNumber || ''],
+                // 주소는 위에 전체로 적습니다. 연락처는 여전히 보여 주지 않고
+                // 이름은 끝자를 가립니다 — 이유는 privacy.ts 에 있습니다.
               ] as const)
                 .filter(([, value]) => value)
                 .map(([label, value]) => (
                   <div key={label} className="flex gap-2 text-xs">
-                    <dt className="w-14 shrink-0 font-semibold text-slate-400">{label}</dt>
+                    <dt className="w-16 shrink-0 font-semibold text-slate-400">{label}</dt>
                     <dd className="font-semibold text-slate-800 break-all">{value}</dd>
                   </div>
                 ))}
@@ -242,7 +244,7 @@ export const WorkOrderPicker: React.FC<WorkOrderPickerProps> = ({
                           // 이미 올라간 건은 짙은 파스텔 초록으로 구분하되, 누르는
                           // 것은 그대로 됩니다 — 남이 잘못 올린 경우 그 건으로
                           // 다시 올려야 하기 때문입니다.
-                          className={`w-full flex items-center gap-3 px-3 py-3 text-left ${
+                          className={`w-full flex items-start gap-3 px-3 py-3 text-left ${
                             order.status === 'SUBMITTED'
                               ? 'bg-emerald-200 hover:bg-emerald-300 active:bg-emerald-400'
                               : 'hover:bg-blue-50 active:bg-blue-100'
@@ -251,22 +253,29 @@ export const WorkOrderPicker: React.FC<WorkOrderPickerProps> = ({
                           {/* 번호를 붙입니다. 줄만 나열하면 세 건인지 네 건인지
                               세어야 알 수 있고, 현장에서 급할수록 그 한 번의
                               세기가 실수로 이어집니다. */}
-                          <span className="shrink-0 w-6 h-6 grid place-items-center rounded-full bg-slate-100 text-[11px] font-bold text-slate-500">
+                          <span className="mt-0.5 shrink-0 w-6 h-6 grid place-items-center rounded-full bg-slate-100 text-[11px] font-bold text-slate-500">
                             {index + 1}
                           </span>
+                          {/* 주문번호 · 주소가 굵게 두 줄, 사람 이름은 그 아래.
+                              기사가 목록에서 찾는 것은 "내가 갈 그 집" 하나이고,
+                              그것을 가르는 값이 주소입니다. 자르지 않습니다 —
+                              같은 아파트의 다른 동이 같은 줄로 보이면 이 목록을
+                              보는 의미가 없습니다. */}
                           <div className="flex-1 min-w-0">
-                            <p className="text-sm font-bold text-slate-900 truncate">
-                              {order.building || maskAddress(order.address) || '(주소 미정)'}
+                            <p className="text-sm font-bold text-slate-900 break-keep">
+                              {order.orderNumber || order.building || '(주문번호 없음)'}
                               {order.status === 'SUBMITTED' && (
                                 <span className="ml-1.5 px-1.5 py-0.5 rounded bg-emerald-600 text-[10px] font-bold text-white align-middle">
                                   업로드 완료
                                 </span>
                               )}
                             </p>
-                            <p className="text-[11px] text-slate-500 truncate">
-                              {order.building && order.address ? `${maskAddress(order.address)} · ` : ''}
-                              {maskName(order.customerName)}
-                              {order.technicianName ? ` · ${order.technicianName}` : ''}
+                            <p className="text-sm font-bold text-slate-900 break-keep">
+                              {order.address || '(주소 미정)'}
+                            </p>
+                            <p className="mt-0.5 text-[11px] text-slate-500 break-keep">
+                              주문자명 : {maskName(order.customerName) || '—'}
+                              {order.technicianName ? ` · 시공예정자 : ${order.technicianName}` : ''}
                             </p>
                           </div>
                           <ChevronRight className="w-4 h-4 text-slate-300 shrink-0" />
