@@ -40,15 +40,30 @@ jobs:
     # environment: 를 두지 않습니다. 두면 OIDC 주체가 "environment:production"
     # 으로 바뀌어, azd pipeline config 가 만든 "main 브랜치" 연결과 맞지 않습니다.
     runs-on: ubuntu-latest
+    # 로그인 정보가 비면 azd 가 사람의 브라우저 로그인을 기다리며 멈춥니다.
+    # 아래 검사로 먼저 막지만, 무엇이든 오래 걸리면 끊습니다.
+    timeout-minutes: 20
     env:
-      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
-      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
-      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-      AZURE_ENV_NAME: ${{ vars.AZURE_ENV_NAME }}
-      AZURE_LOCATION: ${{ vars.AZURE_LOCATION }}
+      # azd 버전에 따라 변수(vars) 또는 비밀(secrets)로 등록됩니다. 둘 다 봅니다.
+      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+      AZURE_ENV_NAME: ${{ vars.AZURE_ENV_NAME || secrets.AZURE_ENV_NAME }}
+      AZURE_LOCATION: ${{ vars.AZURE_LOCATION || secrets.AZURE_LOCATION }}
       # 리소스 그룹은 포털에서 먼저 만들어 azd 가 이름으로 찾아야 합니다.
       AZURE_RESOURCE_GROUP: sigongdata-prod
     steps:
+      - name: Check azd pipeline config values
+        run: |
+          missing=""
+          for name in AZURE_CLIENT_ID AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID AZURE_ENV_NAME AZURE_LOCATION; do
+            [ -n "${!name}" ] || missing="$missing $name"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::비어 있는 값:$missing — PC 에서 'azd pipeline config' 를 다시 실행하거나 저장소 Settings > Secrets and variables > Actions 에 등록하세요."
+            exit 1
+          fi
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
@@ -74,7 +89,8 @@ jobs:
           azd auth login \
             --client-id "$AZURE_CLIENT_ID" \
             --tenant-id "$AZURE_TENANT_ID" \
-            --federated-credential-provider github
+            --federated-credential-provider github \
+            --no-prompt
 
       # 러너에는 .azure 폴더가 없으므로 배포 대상만 알려 주는 환경을 새로 만듭니다.
       - name: Prepare azd environment
