@@ -14,16 +14,22 @@ name: Deploy sigong-upload
 #
 # 인프라(azd provision)는 여기서 돌리지 않습니다. 앱 설정의 비밀값이 Bicep
 # 매개변수로 들어가므로, 코드만 올리는 배포가 인프라를 건드리지 않게 합니다.
+#
+# 지금은 수동 실행 전용입니다(2026-09-29). azd pipeline config 가 관리 ID 에
+# 역할을 주다가 403 으로 멈췄습니다 — 로그인 계정에 역할 할당 권한(Owner 또는
+# User Access Administrator)이 없습니다. 그동안 배포는 PC 에서 `azd deploy` 로
+# 합니다. 권한을 받으면 azd pipeline config 를 다시 돌리고(기존 MSI
+# msi-sigongdata 선택) 아래 push 트리거를 되살리면 됩니다.
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'apps/sigong-upload/**'
-      - 'packages/**'
-      - 'package.json'
-      - 'package-lock.json'
-      - 'azure.yaml'
-      - '.github/workflows/deploy-sigong-upload.yml'
+  # push:
+  #   branches: [main]
+  #   paths:
+  #     - 'apps/sigong-upload/**'
+  #     - 'packages/**'
+  #     - 'package.json'
+  #     - 'package-lock.json'
+  #     - 'azure.yaml'
+  #     - '.github/workflows/deploy-sigong-upload.yml'
   workflow_dispatch:
 
 permissions:
