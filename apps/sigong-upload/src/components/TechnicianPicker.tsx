@@ -84,20 +84,16 @@ export const TechnicianPicker: React.FC<TechnicianPickerProps> = ({
     setHighlight(0);
   }, [query]);
 
-  // Clicking anywhere else closes the dropdown.
-  useEffect(() => {
-    if (!isOpen) return;
-
-    const onPointerDown = (event: MouseEvent | TouchEvent) => {
-      if (!containerRef.current?.contains(event.target as Node)) setIsOpen(false);
-    };
-    document.addEventListener('mousedown', onPointerDown);
-    document.addEventListener('touchstart', onPointerDown);
-    return () => {
-      document.removeEventListener('mousedown', onPointerDown);
-      document.removeEventListener('touchstart', onPointerDown);
-    };
-  }, [isOpen]);
+  /*
+   * 바깥을 눌러도 닫지 않습니다. 휴대폰에서 목록을 보려고 화면을 끌어 올리는
+   * 첫 터치가 "바깥 터치"로 잡혀 팝업이 사라졌기 때문입니다. 닫는 길은 맨 아래
+   * "입력 취소"(키보드는 Esc) 뿐이고, 이미 고른 기사는 그대로 남습니다.
+   */
+  const close = () => {
+    setIsOpen(false);
+    setQuery('');
+    (document.activeElement as HTMLElement | null)?.blur();
+  };
 
   const add = (tech: Technician) => {
     onChange([...selectedIds, tech.id]);
@@ -124,7 +120,7 @@ export const TechnicianPicker: React.FC<TechnicianPickerProps> = ({
       const tech = matches[highlight];
       if (tech) add(tech);
     } else if (event.key === 'Escape') {
-      setIsOpen(false);
+      close();
     } else if (event.key === 'Backspace' && !query && selected.length > 0) {
       remove(selected[selected.length - 1].id);
     }
@@ -190,7 +186,8 @@ export const TechnicianPicker: React.FC<TechnicianPickerProps> = ({
 
       {/* Results */}
       {isOpen && !disabled && (
-        <div className="absolute z-20 left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-lg max-h-64 overflow-y-auto">
+        <div className="absolute z-20 left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-lg overflow-hidden">
+          <div className="max-h-64 overflow-y-auto overscroll-contain">
           {technicians.length === 0 ? (
             <p className="px-4 py-6 text-center text-xs text-slate-400">
               등록된 시공기사가 없습니다. 관리자에게 명부 등록을 요청해 주세요.
@@ -237,6 +234,15 @@ export const TechnicianPicker: React.FC<TechnicianPickerProps> = ({
               })}
             </ul>
           )}
+          </div>
+          <button
+            type="button"
+            onClick={close}
+            className="w-full flex items-center justify-center gap-1.5 px-3 py-3 border-t border-slate-200 bg-slate-50 text-sm font-bold text-slate-600 active:bg-slate-100"
+          >
+            <X className="w-4 h-4" />
+            입력 취소
+          </button>
         </div>
       )}
     </div>

@@ -2,8 +2,8 @@ import React, { useEffect, useState, useRef } from 'react';
 import { TechnicianPicker } from './TechnicianPicker';
 import { WorkOrderPicker } from './WorkOrderPicker';
 import { WorkOrderCalendarPicker } from './WorkOrderCalendarPicker';
-import { DEFAULT_SUBMISSION_ORDER } from '../submission-layout';
-import type { SubmissionFieldKey } from '../submission-layout';
+import { DEFAULT_SUBMISSION_LAYOUT, isSubmissionFieldRequired } from '../submission-layout';
+import type { SubmissionFieldKey, SubmissionLayout } from '../submission-layout';
 import { ConstructionTypePicker } from './ConstructionTypePicker';
 import type { ConstructionTypeConfig, Technician, WorkOrder } from '../types';
 import {
@@ -53,7 +53,7 @@ interface ExternalSubmissionFormProps {
   /** Selectable 시공기사 명부, likewise served by the API. */
   technicians: Technician[];
   /** 시공종류별 입력 항목 차례. 설정에서 정합니다. */
-  submissionOrders?: Record<string, SubmissionFieldKey[]>;
+  submissionOrders?: Record<string, SubmissionLayout>;
 }
 
 const MAX_FILES = 50;
@@ -141,6 +141,7 @@ export const ExternalSubmissionForm: React.FC<ExternalSubmissionFormProps> = ({
     customerName?: string;
     address?: string;
     constructionDate?: string;
+    notes?: string;
     files?: string;
   }>({});
 
@@ -295,7 +296,7 @@ export const ExternalSubmissionForm: React.FC<ExternalSubmissionFormProps> = ({
   const validateForm = (): boolean => {
     const errs: typeof errors = {};
 
-    if (technicianIds.length === 0) {
+    if (technicianIds.length === 0 && isRequired('technicians')) {
       errs.technicians = '시공기사를 1명 이상 선택해 주세요.';
     }
 
@@ -308,21 +309,24 @@ export const ExternalSubmissionForm: React.FC<ExternalSubmissionFormProps> = ({
       }
     }
 
-    if (!workOrder && !manualEntry) {
+    if (!workOrder && !manualOnly) {
       errs.address = '시공건을 목록에서 선택해 주세요.';
-    } else if (!address.trim()) {
+    } else if (manualOnly && !address.trim() && isRequired('address')) {
       errs.address = '현장 주소를 입력해 주세요.';
     }
 
-    // 직접 입력일 때만 필수입니다. 목록에서 고른 건은 주문서에 적힌 주문자를
-    // 그대로 쓰므로 다시 물을 이유가 없고, 직접 입력한 현장은 주문자명이
-    // 없으면 나중에 어느 건인지 특정할 방법이 사라집니다.
-    if (manualEntry && !workOrder && !customerName.trim()) {
+    // 직접 입력일 때만 묻습니다. 목록에서 고른 건은 주문서에 적힌 주문자를
+    // 그대로 쓰므로 다시 물을 이유가 없습니다.
+    if (manualOnly && !customerName.trim() && isRequired('customerName')) {
       errs.customerName = '주문자명을 입력해 주세요.';
     }
 
-    if (!constructionDate) {
+    if (manualOnly && !constructionDate && isRequired('constructionDate')) {
       errs.constructionDate = '시공일을 달력에서 선택해 주세요.';
+    }
+
+    if (!notes.trim() && isRequired('notes')) {
+      errs.notes = '특이사항을 입력해 주세요.';
     }
 
     if (selectedFiles.length > MAX_FILES) {
@@ -356,11 +360,22 @@ export const ExternalSubmissionForm: React.FC<ExternalSubmissionFormProps> = ({
     setConstructionDate(getTodayString());
   };
 
-  /** 이 시공종류의 입력 항목 차례. 정해 두지 않았으면 기본 차례. */
-  const submissionOrder = submissionOrders[constructionType] ?? DEFAULT_SUBMISSION_ORDER;
+  /** 이 시공종류의 입력 화면 설정. 정해 두지 않았으면 기본값. */
+  const layout = submissionOrders[constructionType] ?? DEFAULT_SUBMISSION_LAYOUT;
+  const submissionOrder = layout.order;
+  const isRequired = (key: SubmissionFieldKey) => isSubmissionFieldRequired(layout, key);
+  const requiredMark = (key: SubmissionFieldKey) =>
+    isRequired(key) ? (
+      <span className="text-rose-500">*</span>
+    ) : (
+      <span className="text-xs text-slate-400 font-normal">(선택 입력)</span>
+    );
+
+  /** 주문건을 받지 않는 업체 — 목록 없이 곧장 직접 입력 항목을 보여 줍니다. */
+  const manualMode = layout.mode === 'manual';
 
   /** 직접 입력 중일 때만 나오는 항목인지. */
-  const manualOnly = manualEntry && !workOrder;
+  const manualOnly = manualMode || (manualEntry && !workOrder);
 
   /**
    * 목록을 한 단계 더 좁힐 현장종류.
@@ -464,7 +479,7 @@ export const ExternalSubmissionForm: React.FC<ExternalSubmissionFormProps> = ({
 
     /* 목록을 거를 시공일. 실제로 저장되는 시공일은 고른 주문건에서 옵니다. */
     // 달력 방식에서는 날짜를 달력에서 고르므로 이 칸이 필요 없습니다.
-    pickDate: workOrder || manualEntry || pickerMode === 'calendar' ? null : (
+    pickDate: manualMode || workOrder || manualEntry || pickerMode === 'calendar' ? null : (
       <div>
         <label className="block text-sm font-semibold text-slate-800 mb-1.5">시공일</label>
         <div className="flex flex-wrap items-center gap-2">
@@ -488,7 +503,7 @@ export const ExternalSubmissionForm: React.FC<ExternalSubmissionFormProps> = ({
     ),
 
     /* 그 날짜의 주문건 목록. */
-    workOrder: (
+    workOrder: manualMode ? null : (
       <div>
         <div className="flex items-center justify-between gap-2 mb-1.5">
           <label className="block text-sm font-semibold text-slate-800">
@@ -570,7 +585,7 @@ export const ExternalSubmissionForm: React.FC<ExternalSubmissionFormProps> = ({
     technicians: (
       <div>
         <label className="block text-sm font-semibold text-slate-800 mb-1.5">
-          시공기사 <span className="text-rose-500">*</span>
+          시공기사 {requiredMark('technicians')}
           <span className="ml-1.5 text-xs font-normal text-slate-400">(여러 명 선택 가능)</span>
         </label>
         {workOrder?.technicianName && (
@@ -606,7 +621,7 @@ export const ExternalSubmissionForm: React.FC<ExternalSubmissionFormProps> = ({
     customerName: !manualOnly ? null : (
       <div>
         <label htmlFor="input-customer" className="block text-sm font-semibold text-slate-800 mb-1.5">
-          주문자명 <span className="text-rose-500">*</span>
+          주문자명 {requiredMark('customerName')}
         </label>
         <input
           id="input-customer"
@@ -636,7 +651,7 @@ export const ExternalSubmissionForm: React.FC<ExternalSubmissionFormProps> = ({
     address: !manualOnly ? null : (
       <div>
         <label htmlFor="input-address" className="block text-sm font-semibold text-slate-800 mb-1.5">
-          현장 주소 <span className="text-rose-500">*</span>
+          현장 주소 {requiredMark('address')}
         </label>
         <div className="relative">
           <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
@@ -672,7 +687,7 @@ export const ExternalSubmissionForm: React.FC<ExternalSubmissionFormProps> = ({
       <div>
         <div className="flex items-center justify-between mb-1.5">
           <label htmlFor="input-construction-date" className="block text-sm font-semibold text-slate-800">
-            시공일 <span className="text-rose-500">*</span>
+            시공일 {requiredMark('constructionDate')}
           </label>
           <button
             type="button"
@@ -714,17 +729,30 @@ export const ExternalSubmissionForm: React.FC<ExternalSubmissionFormProps> = ({
     notes: (
       <div>
         <label htmlFor="textarea-notes" className="block text-sm font-semibold text-slate-800 mb-1.5">
-          특이사항 <span className="text-xs text-slate-400 font-normal">(선택 입력)</span>
+          특이사항 {requiredMark('notes')}
         </label>
         <textarea
           id="textarea-notes"
           rows={3}
           value={notes}
-          onChange={(e) => setNotes(e.target.value)}
+          onChange={(e) => {
+            setNotes(e.target.value);
+            if (errors.notes) setErrors((prev) => ({ ...prev, notes: undefined }));
+          }}
           placeholder="예: 싱크대 상판 자재를 현장에서 변경함"
-          className="w-full px-4 py-2.5 rounded-lg border border-slate-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 text-base sm:text-sm focus:outline-hidden transition-all"
+          className={`w-full px-4 py-2.5 rounded-lg border text-base sm:text-sm focus:outline-hidden focus:ring-2 transition-all ${
+            errors.notes
+              ? 'border-rose-300 focus:ring-rose-200 bg-rose-50/30'
+              : 'border-slate-300 focus:border-blue-500 focus:ring-blue-100'
+          }`}
           disabled={isSubmitting}
         />
+        {errors.notes && (
+          <p className="mt-1.5 text-xs text-rose-600 flex items-center gap-1">
+            <AlertTriangle className="w-3.5 h-3.5" />
+            {errors.notes}
+          </p>
+        )}
       </div>
     ),
   };

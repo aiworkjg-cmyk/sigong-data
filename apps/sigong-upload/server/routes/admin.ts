@@ -924,11 +924,11 @@ export function createAdminRouter(ctx: AppContext): Router {
 
   router.put('/settings/submission-order', requireMaster, async (req, res) => {
     try {
-      const order = await ctx.settings.setSubmissionOrder(
+      const layout = await ctx.settings.setSubmissionOrder(
         String(req.body?.constructionType ?? ''),
-        req.body?.order
+        req.body?.layout ?? req.body?.order
       );
-      res.json({ order });
+      res.json({ layout });
     } catch (err) {
       handleSettingsError(err, res);
     }

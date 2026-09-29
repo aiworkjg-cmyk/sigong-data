@@ -1,6 +1,6 @@
-import type { SubmissionFieldKey } from './submission-layout';
+import type { SubmissionFieldKey, SubmissionLayout } from './submission-layout';
 import { normalizeRegionGroup } from './region';
-export type { SubmissionFieldKey };
+export type { SubmissionFieldKey, SubmissionLayout };
 
 /**
  * Domain types shared by the Express server and the React frontend.
@@ -344,8 +344,8 @@ export interface PublicConfig {
   constructionTypeConfigs: ConstructionTypeConfig[];
   /** Selectable roster for the submission form. */
   technicians: Technician[];
-  /** 시공종류별 자료 업로드 입력 항목 차례. 없는 시공종류는 기본 차례. */
-  submissionOrders: Record<string, SubmissionFieldKey[]>;
+  /** 시공종류별 자료 업로드 입력 화면(방식·차례·필수). 없는 시공종류는 기본값. */
+  submissionOrders: Record<string, SubmissionLayout>;
   maxFiles: number;
   maxFileSizeMb: number;
 }

@@ -41,22 +41,16 @@ export const ConstructionTypePicker: React.FC<ConstructionTypePickerProps> = ({
 
   useEffect(() => setHighlight(0), [query]);
 
-  useEffect(() => {
-    if (!isOpen) return;
-
-    const onPointerDown = (event: MouseEvent | TouchEvent) => {
-      if (!containerRef.current?.contains(event.target as Node)) {
-        setIsOpen(false);
-        setQuery('');
-      }
-    };
-    document.addEventListener('mousedown', onPointerDown);
-    document.addEventListener('touchstart', onPointerDown);
-    return () => {
-      document.removeEventListener('mousedown', onPointerDown);
-      document.removeEventListener('touchstart', onPointerDown);
-    };
-  }, [isOpen]);
+  /*
+   * 바깥을 눌러도 닫지 않습니다. 휴대폰에서 목록을 보려고 화면을 끌어 올리는
+   * 첫 터치가 "바깥 터치"로 잡혀 팝업이 사라졌기 때문입니다. 닫는 길은 항목을
+   * 고르거나 맨 아래 "입력 취소"(키보드는 Esc) 뿐입니다.
+   */
+  const cancel = () => {
+    setIsOpen(false);
+    setQuery('');
+    (document.activeElement as HTMLElement | null)?.blur();
+  };
 
   const pick = (type: string) => {
     onChange(type);
@@ -78,8 +72,7 @@ export const ConstructionTypePicker: React.FC<ConstructionTypePickerProps> = ({
       event.preventDefault();
       if (matches[highlight]) pick(matches[highlight]);
     } else if (event.key === 'Escape') {
-      setIsOpen(false);
-      setQuery('');
+      cancel();
     }
   };
 
@@ -138,7 +131,8 @@ export const ConstructionTypePicker: React.FC<ConstructionTypePickerProps> = ({
       )}
 
       {isOpen && !disabled && (
-        <div className="absolute z-20 left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-lg max-h-60 overflow-y-auto">
+        <div className="absolute z-20 left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-lg overflow-hidden">
+          <div className="max-h-60 overflow-y-auto overscroll-contain">
           {types.length === 0 ? (
             <p className="px-4 py-6 text-center text-xs text-slate-400">
               {emptyMessage}
@@ -176,6 +170,15 @@ export const ConstructionTypePicker: React.FC<ConstructionTypePickerProps> = ({
               })}
             </ul>
           )}
+          </div>
+          <button
+            type="button"
+            onClick={cancel}
+            className="w-full flex items-center justify-center gap-1.5 px-3 py-3 border-t border-slate-200 bg-slate-50 text-sm font-bold text-slate-600 active:bg-slate-100"
+          >
+            <X className="w-4 h-4" />
+            입력 취소
+          </button>
         </div>
       )}
     </div>

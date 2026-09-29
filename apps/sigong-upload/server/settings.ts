@@ -12,10 +12,10 @@ import type { FolderRule } from '@jg/sharepoint-core';
 import { config } from './config';
 import type { SettingsRepository } from './repositories';
 import { TECHNICIAN_TITLES } from '../src/types';
-import { normalizeSubmissionOrder } from '../src/submission-layout';
+import { normalizeSubmissionLayout } from '../src/submission-layout';
 import { validateTechnicianImport } from './technician-import';
 import type { SheetTable } from './spreadsheet';
-import type { SubmissionFieldKey } from '../src/submission-layout';
+import type { SubmissionLayout } from '../src/submission-layout';
 import type {
   ConstructionTypeConfig,
   DynamicFieldConfig,
@@ -152,7 +152,7 @@ export class SettingsService {
     fileNameTemplate?: string;
   } | null = null;
   private teamsWebhookList: TeamsWebhookProfile[] = [];
-  private submissionOrderMap: Record<string, SubmissionFieldKey[]> = {};
+  private submissionOrderMap: Record<string, SubmissionLayout> = {};
   private constructionTypeConfigList: ConstructionTypeConfig[] = [];
   private storageTargetList: SharePointStorageTarget[] = [];
   private activeStorageTargetId = '';
@@ -247,19 +247,19 @@ export class SettingsService {
    * 누가 갔는지를 먼저 적는 곳도 있습니다. 그래서 하나가 아니라 시공종류마다
    * 따로 둡니다. 정해 두지 않은 시공종류는 기본 차례를 씁니다.
    */
-  submissionOrders(): Record<string, SubmissionFieldKey[]> {
-    const result: Record<string, SubmissionFieldKey[]> = {};
+  submissionOrders(): Record<string, SubmissionLayout> {
+    const result: Record<string, SubmissionLayout> = {};
     for (const name of this.constructionTypeList) {
-      result[name] = normalizeSubmissionOrder(this.submissionOrderMap[name]);
+      result[name] = normalizeSubmissionLayout(this.submissionOrderMap[name]);
     }
     return result;
   }
 
-  submissionOrder(constructionType = ''): SubmissionFieldKey[] {
-    return normalizeSubmissionOrder(this.submissionOrderMap[constructionType]);
+  submissionOrder(constructionType = ''): SubmissionLayout {
+    return normalizeSubmissionLayout(this.submissionOrderMap[constructionType]);
   }
 
-  async setSubmissionOrder(constructionType: string, input: unknown): Promise<SubmissionFieldKey[]> {
+  async setSubmissionOrder(constructionType: string, input: unknown): Promise<SubmissionLayout> {
     const name = normalizeTypeName(constructionType);
     if (!this.constructionTypeList.includes(name)) {
       throw new SettingsError('등록되지 않은 시공종류입니다.', 404);
@@ -269,7 +269,7 @@ export class SettingsService {
     // 하는 편이 어긋날 여지가 없습니다.
     this.submissionOrderMap = {
       ...this.submissionOrderMap,
-      [name]: normalizeSubmissionOrder(input),
+      [name]: normalizeSubmissionLayout(input),
     };
     await this.repo.set(SUBMISSION_ORDER_KEY, JSON.stringify(this.submissionOrderMap));
     return this.submissionOrder(name);
@@ -996,13 +996,13 @@ function cleanLabel(value: unknown, maxLength: number): string {
  * 것인데 옛 값을 전부에 복사하면 나눈 의미가 없어집니다. 정하지 않은
  * 시공종류는 어차피 기본 차례로 그려집니다.
  */
-function parseSubmissionOrders(raw: string | null): Record<string, SubmissionFieldKey[]> {
+function parseSubmissionOrders(raw: string | null): Record<string, SubmissionLayout> {
   try {
     const value = raw ? JSON.parse(raw) : {};
     if (!value || Array.isArray(value) || typeof value !== 'object') return {};
-    const result: Record<string, SubmissionFieldKey[]> = {};
+    const result: Record<string, SubmissionLayout> = {};
     for (const [name, order] of Object.entries(value)) {
-      result[name] = normalizeSubmissionOrder(order);
+      result[name] = normalizeSubmissionLayout(order);
     }
     return result;
   } catch {

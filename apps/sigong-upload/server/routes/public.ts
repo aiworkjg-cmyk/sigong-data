@@ -5,6 +5,7 @@ import multer from 'multer';
 import { config } from '../config';
 import { mailer } from '../mailer';
 import { formatTechnicians } from '../../src/types';
+import { isSubmissionFieldRequired, type SubmissionFieldKey } from '../../src/submission-layout';
 import type { AppContext } from '../context';
 import { stagingDirFor, storedNameFor } from '../submission';
 import {
@@ -21,6 +22,11 @@ interface SubmissionRequest extends Request {
 }
 
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+/** 한국 기준 오늘 날짜(YYYY-MM-DD). 서버 시계가 UTC 여도 기사가 보는 날짜와 맞춥니다. */
+function todayInKorea(): string {
+  return new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Seoul' });
+}
 
 /**
  * Roster ids from a multipart body. A single-value field arrives as a string
@@ -296,10 +302,23 @@ export function createPublicRouter(ctx: AppContext): Router {
         constructionDate = workOrder.scheduledDate || constructionDate;
       }
 
-      // 직접 입력한 현장은 주문자명이 있어야 합니다. 주문건에서 온 건은 위에서
-      // 그 값으로 덮어썼으므로 여기서 걸리지 않습니다.
-      if (!workOrder && !customerName) {
+      // 필수 여부는 시공종류별 설정이 정합니다. 화면과 같은 판단을 여기서 한 번
+      // 더 합니다 — 화면만 믿으면 조작한 요청이 필수 항목을 건너뜁니다.
+      const layout = ctx.settings.submissionOrder(constructionType);
+      const isRequired = (key: SubmissionFieldKey) => isSubmissionFieldRequired(layout, key);
+      if (layout.mode === 'manual' && workOrder) {
+        return reject('이 시공종류는 주문건을 고르지 않고 직접 입력합니다. 화면을 새로고침해 주세요.');
+      }
+
+      // 직접 입력한 현장만 검사합니다. 주문건에서 온 건은 위에서 그 값으로
+      // 덮어썼으므로 여기서 걸리지 않습니다.
+      if (!workOrder && !customerName && isRequired('customerName')) {
         return reject('주문자명을 입력해 주세요.');
+      }
+      // 시공일을 선택 입력으로 둔 업체가 비워 보내면 제출한 날을 씁니다. 시공건
+      // 번호와 폴더 이름이 날짜를 쓰므로 빈 채로 둘 수는 없습니다.
+      if (!constructionDate && !isRequired('constructionDate')) {
+        constructionDate = todayInKorea();
       }
 
       // Never trust the posted value — it becomes a folder name. Checked against
@@ -321,8 +340,11 @@ export function createPublicRouter(ctx: AppContext): Router {
           return reject(`${field.label} 항목은 설정에 등록된 값에서 선택해 주세요.`);
         }
       }
-      if (technicians.length === 0) return reject('시공기사를 1명 이상 선택해 주세요.');
-      if (!address) return reject('현장 주소를 입력해 주세요.');
+      if (technicians.length === 0 && isRequired('technicians')) {
+        return reject('시공기사를 1명 이상 선택해 주세요.');
+      }
+      if (!address && isRequired('address')) return reject('현장 주소를 입력해 주세요.');
+      if (!notes && isRequired('notes')) return reject('특이사항을 입력해 주세요.');
       if (!DATE_PATTERN.test(constructionDate)) return reject('시공일을 달력에서 선택해 주세요.');
       if (files.length === 0) return reject('사진 또는 동영상을 1개 이상 첨부해 주세요.');
 

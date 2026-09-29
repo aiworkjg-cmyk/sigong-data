@@ -1,4 +1,4 @@
-import type { SubmissionFieldKey, SubmissionFieldMeta } from './submission-layout';
+import type { SubmissionFieldMeta, SubmissionLayout } from './submission-layout';
 import type {
   AdminSession,
   AdminUser,
@@ -341,14 +341,14 @@ export const adminApi = {
     ),
 
   submissionOrders: () =>
-    request<{ orders: Record<string, SubmissionFieldKey[]>; fields: SubmissionFieldMeta[] }>(
+    request<{ orders: Record<string, SubmissionLayout>; fields: SubmissionFieldMeta[] }>(
       '/api/admin/settings/submission-order'
     ),
 
-  setSubmissionOrder: (constructionType: string, order: SubmissionFieldKey[]) =>
-    request<{ order: SubmissionFieldKey[] }>('/api/admin/settings/submission-order', {
+  setSubmissionOrder: (constructionType: string, layout: SubmissionLayout) =>
+    request<{ layout: SubmissionLayout }>('/api/admin/settings/submission-order', {
       method: 'PUT',
-      body: JSON.stringify({ constructionType, order }),
+      body: JSON.stringify({ constructionType, layout }),
     }),
 
   constructionTypeConfigs: () =>

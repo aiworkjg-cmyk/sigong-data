@@ -31,6 +31,26 @@ export interface SubmissionFieldMeta {
   required?: boolean;
   /** 직접 입력을 고른 뒤에만 나오는 항목. */
   manualOnly?: boolean;
+  /** 주문건 수집 방식에서만 쓰는 항목. 직접 입력 방식에서는 목록에서 사라집니다. */
+  orderOnly?: boolean;
+  /** 관리자가 필수/선택을 정할 수 있는 항목과 그 기본값. 없으면 전환 불가. */
+  requiredByDefault?: boolean;
+}
+
+/**
+ * 제출 방식.
+ *
+ * - order: 주문서에서 들어온 주문건을 고릅니다. 목록에 없으면 직접 입력으로 넘어갑니다.
+ * - manual: 주문건을 받지 않는 업체. 목록 없이 설정한 항목만 받습니다.
+ */
+export type SubmissionMode = 'order' | 'manual';
+
+/** 시공종류 하나의 입력 화면 설정. */
+export interface SubmissionLayout {
+  mode: SubmissionMode;
+  order: SubmissionFieldKey[];
+  /** 필수로 받는 항목. 필수/선택을 정할 수 있는 항목만 들어갑니다. */
+  required: SubmissionFieldKey[];
 }
 
 export const SUBMISSION_FIELDS: SubmissionFieldMeta[] = [
@@ -46,37 +66,41 @@ export const SUBMISSION_FIELDS: SubmissionFieldMeta[] = [
     label: '현장종류 · 업체별 입력 항목',
     hint: '시공종류마다 설정한 추가 입력 항목. 주문서 시트 이름이 곧 현장종류입니다.',
   },
-  { key: 'pickDate', label: '날짜', hint: '주문건 목록을 거를 시공일.' },
+  { key: 'pickDate', label: '날짜', hint: '주문건 목록을 거를 시공일.', orderOnly: true },
   {
     key: 'workOrder',
     label: '등록된 주문건 목록',
-    hint: '그 날짜의 시공건을 고릅니다. 목록에 없으면 직접 입력으로 넘어갑니다.',
-    required: true,
+    hint: '그 날짜의 시공건을 고릅니다. 목록에 없으면 직접 입력으로 넘어갑니다. 빼면 직접 입력 방식이 됩니다.',
+    orderOnly: true,
   },
   {
     key: 'technicians',
     label: '시공기사',
     hint: '실제로 다녀온 기사. 주문서의 예정 기사와 달라도 됩니다.',
+    requiredByDefault: true,
   },
   {
     key: 'customerName',
     label: '주문자명',
-    hint: '직접 입력일 때만 나옵니다(필수). 주문건을 골랐으면 그 값을 씁니다.',
+    hint: '직접 입력일 때만 나옵니다. 주문건을 골랐으면 그 값을 씁니다.',
     manualOnly: true,
+    requiredByDefault: true,
   },
   {
     key: 'address',
     label: '현장주소',
-    hint: '직접 입력일 때만 나옵니다. 주문건을 골랐으면 읽기 전용으로 보여 줍니다.',
+    hint: '직접 입력일 때만 나옵니다. 주문건을 골랐으면 그 주소를 씁니다.',
     manualOnly: true,
+    requiredByDefault: true,
   },
   {
     key: 'constructionDate',
     label: '실제 시공일',
-    hint: '직접 입력일 때만 나옵니다. 주문건을 골랐으면 그 예정일을 씁니다.',
+    hint: '직접 입력일 때만 나옵니다. 주문건을 골랐으면 그 예정일을 씁니다. 선택 입력이면 비워 둘 때 제출일을 씁니다.',
     manualOnly: true,
+    requiredByDefault: true,
   },
-  { key: 'notes', label: '특이사항', hint: '선택 입력.' },
+  { key: 'notes', label: '특이사항', hint: '기사가 남기는 메모.', requiredByDefault: false },
 ];
 
 const META = new Map(SUBMISSION_FIELDS.map((field) => [field.key, field]));
@@ -109,7 +133,7 @@ export const DEFAULT_SUBMISSION_ORDER: SubmissionFieldKey[] = [
  * "전부 뺀 것"으로 읽으면 새 업체의 제출 화면이 시공종류 하나만 남습니다.
  * 시공종류는 무엇이 저장돼 있든 맨 앞으로 되돌립니다.
  */
-export function normalizeSubmissionOrder(input: unknown): SubmissionFieldKey[] {
+function normalizeSubmissionOrder(input: unknown, mode: SubmissionMode): SubmissionFieldKey[] {
   const raw = Array.isArray(input) && input.length > 0 ? input : DEFAULT_SUBMISSION_ORDER;
   const seen = new Set<SubmissionFieldKey>();
   const order: SubmissionFieldKey[] = [];
@@ -117,6 +141,7 @@ export function normalizeSubmissionOrder(input: unknown): SubmissionFieldKey[] {
   for (const value of raw) {
     const key = String(value) as SubmissionFieldKey;
     if (!META.has(key) || seen.has(key) || key === 'constructionType') continue;
+    if (mode === 'manual' && META.get(key)?.orderOnly) continue;
     seen.add(key);
     order.push(key);
   }
@@ -129,4 +154,53 @@ export function normalizeSubmissionOrder(input: unknown): SubmissionFieldKey[] {
     seen.add(key);
   }
   return ['constructionType', ...order];
+}
+
+export function defaultRequiredFields(): SubmissionFieldKey[] {
+  return SUBMISSION_FIELDS.filter((field) => field.requiredByDefault).map((field) => field.key);
+}
+
+/**
+ * 저장된 설정을 믿을 수 있는 설정으로 만듭니다.
+ *
+ * 예전에는 순서 배열만 저장했습니다. 그 값은 주문건 수집 방식 + 기본 필수값으로
+ * 읽습니다 — 이미 쓰던 업체의 화면이 저장 형식이 바뀌었다고 달라지면 안 됩니다.
+ *
+ * 주문건 목록을 뺀 주문건 수집 방식은 성립하지 않으므로 직접 입력 방식으로
+ * 봅니다. 목록을 빼는 것과 직접 입력을 고르는 것은 같은 뜻입니다.
+ */
+export function normalizeSubmissionLayout(input: unknown): SubmissionLayout {
+  const value = (input && typeof input === 'object' && !Array.isArray(input) ? input : {}) as {
+    mode?: unknown;
+    order?: unknown;
+    required?: unknown;
+  };
+  const rawOrder = Array.isArray(input) ? input : value.order;
+  let mode: SubmissionMode = value.mode === 'manual' ? 'manual' : 'order';
+  if (
+    mode === 'order' &&
+    Array.isArray(rawOrder) &&
+    rawOrder.length > 0 &&
+    !rawOrder.includes('workOrder')
+  ) {
+    mode = 'manual';
+  }
+  const order = normalizeSubmissionOrder(rawOrder, mode);
+  const storedRequired = Array.isArray(value.required) ? (value.required as unknown[]) : null;
+  const required = storedRequired
+    ? SUBMISSION_FIELDS.filter(
+        (field) => field.requiredByDefault !== undefined && storedRequired.includes(field.key)
+      ).map((field) => field.key)
+    : defaultRequiredFields();
+  return { mode, order, required };
+}
+
+export const DEFAULT_SUBMISSION_LAYOUT: SubmissionLayout = normalizeSubmissionLayout(null);
+
+/**
+ * 그 항목을 반드시 받아야 하는지. 화면에서 뺀 항목은 필수일 수 없습니다 —
+ * 기사가 채울 칸이 없는데 필수로 두면 제출이 영영 막힙니다.
+ */
+export function isSubmissionFieldRequired(layout: SubmissionLayout, key: SubmissionFieldKey): boolean {
+  return layout.order.includes(key) && layout.required.includes(key);
 }
