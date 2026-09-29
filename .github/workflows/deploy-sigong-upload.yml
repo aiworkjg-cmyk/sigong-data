@@ -1,7 +1,19 @@
 name: Deploy sigong-upload
 
-# Builds the app and pushes it to Azure App Service. Only paths that affect
-# this app trigger a deploy, so a future sibling app in apps/ will not.
+# PC 에서 쓰는 `azd deploy` 를 그대로 돌립니다. 배포 방법이 PC 와 GitHub 에
+# 따로 있으면 한쪽만 고쳐지고 다른 쪽은 조용히 망가집니다 — 게시 프로필로
+# 올리던 예전 방식이 azd 로 옮긴 뒤 몇 달 동안 실패하고 있었습니다.
+#
+# 로그인은 비밀번호 파일(게시 프로필) 대신 OIDC 입니다. 만료되거나 앱을 다시
+# 만들면 무효가 되는 비밀값이 없습니다. 연결은 PC 에서 한 번만 합니다:
+#
+#   azd pipeline config
+#
+# 이 명령이 GitHub 저장소 변수 AZURE_CLIENT_ID · AZURE_TENANT_ID ·
+# AZURE_SUBSCRIPTION_ID · AZURE_ENV_NAME · AZURE_LOCATION 을 등록합니다.
+#
+# 인프라(azd provision)는 여기서 돌리지 않습니다. 앱 설정의 비밀값이 Bicep
+# 매개변수로 들어가므로, 코드만 올리는 배포가 인프라를 건드리지 않게 합니다.
 on:
   push:
     branches: [main]
@@ -10,13 +22,13 @@ on:
       - 'packages/**'
       - 'package.json'
       - 'package-lock.json'
+      - 'azure.yaml'
       - '.github/workflows/deploy-sigong-upload.yml'
   workflow_dispatch:
 
-env:
-  NODE_VERSION: '22.x'
-  # Must match the App Service name created in docs/azure-deployment.md.
-  AZURE_WEBAPP_NAME: sigongdata-prod
+permissions:
+  id-token: write
+  contents: read
 
 concurrency:
   # A newer commit supersedes an in-flight deploy rather than racing it.
@@ -24,69 +36,55 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
+  deploy:
+    # environment: 를 두지 않습니다. 두면 OIDC 주체가 "environment:production"
+    # 으로 바뀌어, azd pipeline config 가 만든 "main 브랜치" 연결과 맞지 않습니다.
     runs-on: ubuntu-latest
+    env:
+      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      AZURE_ENV_NAME: ${{ vars.AZURE_ENV_NAME }}
+      AZURE_LOCATION: ${{ vars.AZURE_LOCATION }}
+      # 리소스 그룹은 포털에서 먼저 만들어 azd 가 이름으로 찾아야 합니다.
+      AZURE_RESOURCE_GROUP: sigongdata-prod
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version: '22.x'
           cache: npm
 
+      # 올리기 전에 막을 수 있는 것은 여기서 막습니다.
       - name: Install dependencies
         run: npm ci
 
       - name: Typecheck
         run: npm run lint
 
-      - name: Build web and server bundles
-        run: npm run build --workspace @jg/sigong-upload
+      - name: Test
+        run: npm test
 
-      # The server bundle already inlines @jg/sharepoint-core, so only the
-      # externalised runtime packages need to ship. Reinstalling without dev
-      # dependencies keeps the deployment artifact small.
-      - name: Install production dependencies only
+      - name: Install azd
+        uses: Azure/setup-azd@v2
+
+      - name: Log in with OIDC
         run: |
-          rm -rf node_modules
-          npm ci --omit=dev
-          # The workspace symlink is not needed at runtime and does not
-          # survive artifact packaging cleanly.
-          rm -rf node_modules/@jg
+          azd auth login \
+            --client-id "$AZURE_CLIENT_ID" \
+            --tenant-id "$AZURE_TENANT_ID" \
+            --federated-credential-provider github
 
-      - name: Assemble deployment package
+      # 러너에는 .azure 폴더가 없으므로 배포 대상만 알려 주는 환경을 새로 만듭니다.
+      - name: Prepare azd environment
         run: |
-          mkdir -p deploy/apps/sigong-upload
-          cp -r node_modules deploy/node_modules
-          cp -r apps/sigong-upload/dist deploy/apps/sigong-upload/dist
-          cp package.json package-lock.json deploy/
-          cp apps/sigong-upload/package.json deploy/apps/sigong-upload/
+          azd env new "$AZURE_ENV_NAME" \
+            --subscription "$AZURE_SUBSCRIPTION_ID" \
+            --location "$AZURE_LOCATION" \
+            --no-prompt
+          azd env set AZURE_RESOURCE_GROUP "$AZURE_RESOURCE_GROUP"
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: sigong-upload
-          path: deploy
-          retention-days: 5
-
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: production
-      url: ${{ steps.deploy.outputs.webapp-url }}
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: sigong-upload
-          path: deploy
-
-      - name: Deploy to Azure App Service
-        id: deploy
-        uses: azure/webapps-deploy@v3
-        with:
-          app-name: ${{ env.AZURE_WEBAPP_NAME }}
-          # Create this secret from the App Service publish profile.
-          # See docs/azure-deployment.md for the OIDC alternative, which
-          # avoids storing a long-lived credential in GitHub.
-          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
-          package: deploy
+      # azure.yaml 의 prepackage 훅이 빌드와 배포 폴더 준비를 합니다(PC 와 같음).
+      - name: Deploy
+        run: azd deploy --no-prompt
